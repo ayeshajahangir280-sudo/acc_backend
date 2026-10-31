@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.errors import DomainError
+from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import next_number
 from apps.inventory import services as stock
 from apps.inventory.models import Location, StockMovement
@@ -25,13 +26,13 @@ def create_vehicle(org, *, name, plate_number="", driver_name=""):
     return Vehicle.objects.create(organization=org, name=name, plate_number=plate_number, driver_name=driver_name, location=loc)
 
 
+@retry_on_key_conflict
 @transaction.atomic
 def create_load(org, user, *, vehicle, lines, dispatch_at, source_location=None, assigned_to="", note="", idempotency_key=None):
     """lines: [{"item": Item, "quantity": Decimal}]. Moves stock source -> van immediately."""
-    if idempotency_key:
-        existing = VanLoad.objects.filter(organization=org, idempotency_key=idempotency_key).first()
-        if existing:
-            return existing, False
+    existing = find_existing(VanLoad, org, idempotency_key)
+    if existing:
+        return existing, False
     source = source_location or stock.default_location(org)
     if vehicle.organization_id != org.id or not vehicle.is_active:
         raise DomainError("Vehicle must be an active vehicle of this organization.", "invalid_vehicle")

@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Sum
 
 from apps.core.errors import DomainError
+from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import DocStatus, next_number
 from apps.core.money import money
 from apps.ledger.services import Line, post_journal, system_account, void_journal
@@ -18,14 +19,14 @@ SPEC = {
 }
 
 
+@retry_on_key_conflict
 @transaction.atomic
 def create_cash_document(org, user, direction, *, date, amount, cash_account, party=None, counter_account=None,
                          method="cash", reference="", narration="", branch=None, idempotency_key=None, allocations=()):
     model, prefix, kinds, control_code = SPEC[direction]
-    if idempotency_key:
-        existing = model.objects.filter(organization=org, idempotency_key=idempotency_key).first()
-        if existing:
-            return existing, False
+    existing = find_existing(model, org, idempotency_key)
+    if existing:
+        return existing, False
     amount = money(amount)
     if amount <= 0:
         raise DomainError("Amount must be greater than zero.", "invalid_amount")

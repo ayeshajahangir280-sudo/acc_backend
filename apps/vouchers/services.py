@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import transaction
 
 from apps.core.errors import DomainError
+from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import DocStatus, next_number
 from apps.core.money import money
 from apps.ledger.services import Line, post_journal, void_journal
@@ -13,13 +14,13 @@ from .models import Voucher, VoucherLine
 PREFIX = {"general": "GV", "journal": "JV", "contra": "CV"}
 
 
+@retry_on_key_conflict
 @transaction.atomic
 def create_voucher(org, user, vtype, *, date, lines, narration="", branch=None, idempotency_key=None):
     """lines: list of dicts {account, debit, credit, party?, description?}. Balance is enforced by the ledger."""
-    if idempotency_key:
-        existing = Voucher.objects.filter(organization=org, idempotency_key=idempotency_key).first()
-        if existing:
-            return existing, False
+    existing = find_existing(Voucher, org, idempotency_key)
+    if existing:
+        return existing, False
     if vtype not in PREFIX:
         raise DomainError("Unknown voucher type.", "invalid_type")
     rules.validate(vtype, lines)

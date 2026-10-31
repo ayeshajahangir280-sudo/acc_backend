@@ -45,5 +45,9 @@ RULES = {"journal": _journal, "general": _general, "contra": _contra}
 
 
 def validate(vtype, lines):
+    # A General voucher's purpose rule goes first so the user is told to use the dedicated screen
+    # (the most helpful message) before any generic line-level complaint such as a missing party.
+    if vtype == "general":
+        _general(lines)
     _common(lines)
     RULES[vtype](lines)

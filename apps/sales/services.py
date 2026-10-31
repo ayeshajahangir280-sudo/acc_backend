@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Sum
 
 from apps.core.errors import DomainError
+from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import DocStatus, next_number
 from apps.core.money import line_amounts
 from apps.ledger.services import Line, post_journal, system_account, void_journal
@@ -28,13 +29,13 @@ def _prepare_items(items):
     return rows, sub, tax
 
 
+@retry_on_key_conflict
 @transaction.atomic
 def create_document(org, user, *, kind, party, date, items, branch=None, narration="", original=None, idempotency_key=None, due_date=None):
     """Create and post a sales invoice or sales return. Returns (document, created)."""
-    if idempotency_key:
-        existing = SalesInvoice.objects.filter(organization=org, idempotency_key=idempotency_key).first()
-        if existing:
-            return existing, False
+    existing = find_existing(SalesInvoice, org, idempotency_key)
+    if existing:
+        return existing, False
     if party.organization_id != org.id or party.kind not in ("customer", "both") or not party.is_active:
         raise DomainError("Party must be an active customer of this organization.", "invalid_party")
 

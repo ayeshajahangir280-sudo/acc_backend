@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Sum
 
 from apps.core.errors import DomainError
+from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import DocStatus, next_number
 
 from .models import Item, Location, ProductionInput, ProductionOrder, StockMovement
@@ -79,13 +80,13 @@ def transfer_stock(org, user, *, item, source, destination, quantity, date, ref_
     move(org, user, item, destination, quantity, StockMovement.Type.TRANSFER_IN, date, ref_type, ref_id, note)
 
 
+@retry_on_key_conflict
 @transaction.atomic
 def create_production(org, user, *, date, item, quantity, location, inputs, note="", idempotency_key=None):
     """inputs: [{"item": Item, "quantity": Decimal}]. Consumes raw materials and produces the finished good."""
-    if idempotency_key:
-        existing = ProductionOrder.objects.filter(organization=org, idempotency_key=idempotency_key).first()
-        if existing:
-            return existing, False
+    existing = find_existing(ProductionOrder, org, idempotency_key)
+    if existing:
+        return existing, False
     quantity = qty(quantity)
     _check_same_org(org, item, location)
     if item.kind != Item.Kind.FINISHED_GOOD:
