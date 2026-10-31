@@ -24,7 +24,7 @@ class AccountViewSet(OrgScopedMixin, viewsets.ModelViewSet):
         bal = selectors.account_balances(request.organization, request.query_params.get("as_of"))
         return Response(
             [
-                {"account": a.id, "code": a.code, "name": a.name, "type": a.type,
+                {"account": a.id, "code": a.code, "name": a.name, "type": a.type, "is_cash_bank": a.is_cash_bank,
                  "debit": bal.get(a.id, (0, 0))[0], "credit": bal.get(a.id, (0, 0))[1]}
                 for a in self.get_queryset().order_by("code")
             ]
