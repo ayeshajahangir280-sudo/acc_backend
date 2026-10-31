@@ -103,7 +103,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = os.environ.get("DJANGO_TIME_ZONE", "Asia/Dubai")
+TIME_ZONE = "Asia/Dubai"  # fixed for the UAE; intentionally not configurable via environment
 USE_I18N = True
 USE_TZ = True
 
