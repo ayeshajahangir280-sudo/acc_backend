@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 
 from .permissions import IsOrgMember
 
@@ -38,7 +38,12 @@ class LoginView(APIView):
     throttle_scope = "login"
 
     def post(self, request):
-        user = authenticate(username=request.data.get("username"), password=request.data.get("password"))
+        username = (request.data.get("username") or "").strip()
+        if "@" in username:  # allow signing in with the email address too
+            match = get_user_model().objects.filter(email__iexact=username).first()
+            if match:
+                username = match.get_username()
+        user = authenticate(username=username, password=request.data.get("password"))
         if user is None or not user.is_active:
             return Response({"detail": "Invalid credentials."}, status=400)
         token, _ = Token.objects.get_or_create(user=user)
