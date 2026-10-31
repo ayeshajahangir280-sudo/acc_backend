@@ -18,4 +18,7 @@ def on_starting(server):
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     django.setup()
-    call_command("collectstatic", interactive=False, verbosity=0)
+    try:
+        call_command("collectstatic", interactive=False, verbosity=0)
+    except Exception as exc:  # never block startup on static files
+        server.log.warning("collectstatic failed: %s", exc)

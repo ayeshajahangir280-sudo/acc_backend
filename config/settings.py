@@ -13,6 +13,11 @@ def env_list(name, default=""):
     return [v.strip() for v in os.environ.get(name, default).split(",") if v.strip()]
 
 
+def env_origins(name):
+    # Origins must be scheme://host[:port] with no path; tolerate a trailing "/".
+    return [v.rstrip("/") for v in env_list(name)]
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
 if not SECRET_KEY:
@@ -115,11 +120,11 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {"user": os.environ.get("API_THROTTLE_USER", "2000/hour"), "login": "20/min"},
 }
 
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
+CORS_ALLOWED_ORIGINS = env_origins("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_HEADERS = [
     "accept", "authorization", "content-type", "origin", "x-organization-id", "x-requested-with",
 ]
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = env_origins("CSRF_TRUSTED_ORIGINS")
 
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
