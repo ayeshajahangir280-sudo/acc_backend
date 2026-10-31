@@ -13,9 +13,13 @@ def env_list(name, default=""):
     return [v.strip() for v in os.environ.get(name, default).split(",") if v.strip()]
 
 
-def env_origins(name):
-    # Origins must be scheme://host[:port] with no path; tolerate a trailing "/".
-    return [v.rstrip("/") for v in env_list(name)]
+def env_origins(*names):
+    # First non-empty variable wins. Origins must be scheme://host[:port] with no
+    # path, so tolerate a trailing "/".
+    for name in names:
+        if values := env_list(name):
+            return [v.rstrip("/") for v in values]
+    return []
 
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
@@ -26,7 +30,8 @@ if not SECRET_KEY:
     else:
         raise RuntimeError("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is not true.")
 
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1" if DEBUG else "")
+# Host filtering is left to the reverse proxy (Traefik); override to restrict.
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "*")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -120,15 +125,17 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {"user": os.environ.get("API_THROTTLE_USER", "2000/hour"), "login": "20/min"},
 }
 
-CORS_ALLOWED_ORIGINS = env_origins("CORS_ALLOWED_ORIGINS")
+# CORS_ORIGIN: comma-separated frontend origins (CORS_ALLOWED_ORIGINS also accepted).
+CORS_ALLOWED_ORIGINS = env_origins("CORS_ORIGIN", "CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_HEADERS = [
     "accept", "authorization", "content-type", "origin", "x-organization-id", "x-requested-with",
 ]
-CSRF_TRUSTED_ORIGINS = env_origins("CSRF_TRUSTED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = env_origins("CSRF_TRUSTED_ORIGINS") or CORS_ALLOWED_ORIGINS
 
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SSL_REDIRECT", "true").lower() == "true"
+    # Traefik terminates HTTPS and handles redirects; opt in only if needed.
+    SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SSL_REDIRECT", "false").lower() == "true"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0"))
