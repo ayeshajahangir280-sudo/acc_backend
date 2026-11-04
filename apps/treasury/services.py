@@ -7,7 +7,7 @@ from apps.core.errors import DomainError
 from apps.core.idempotency import find_existing, retry_on_key_conflict
 from apps.core.models import DocStatus, next_number
 from apps.core.money import money
-from apps.ledger.services import Line, post_journal, system_account, void_journal
+from apps.ledger.services import Line, assert_period_open, post_journal, system_account, void_journal
 
 from .models import Payment, PaymentAllocation, Receipt, ReceiptAllocation
 from .selectors import KINDS, outstanding_invoices
@@ -91,6 +91,8 @@ def apply_allocations(org, doc, direction, allocations):
         inv = found.get(inv_id)
         if inv is None or inv.party_id != doc.party_id:
             raise DomainError("Invoice must be a posted invoice of the same party.", "invalid_invoice")
+        if inv.branch_id != doc.branch_id:
+            raise DomainError(f"{inv.number}: a receipt/payment can only be applied to invoices of its own branch.", "branch_mismatch")
         if amt > inv.outstanding:
             raise DomainError(f"{inv.number}: allocation {amt} exceeds outstanding {inv.outstanding}.", "over_applied")
         row, created = alloc_model.objects.get_or_create(organization=org, invoice=inv, **{field: doc}, defaults={"amount": amt})
@@ -101,6 +103,8 @@ def apply_allocations(org, doc, direction, allocations):
 
 @transaction.atomic
 def allocate_existing(org, doc, direction, allocations):
+    # Re-applying a receipt/payment dated in a locked period would change settled history (aging as-of that date).
+    assert_period_open(org, doc.date)
     apply_allocations(org, doc, direction, allocations)
     return doc
 

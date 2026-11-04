@@ -24,8 +24,8 @@ def _lines(org, date_from=None, date_to=None, branch=None):
         qs = qs.filter(date__gte=date_from)
     if date_to:
         qs = qs.filter(date__lte=date_to)
-    if branch:
-        qs = qs.filter(branch_id=branch)
+    if branch is not None:  # None = all branches; an int or iterable of ids restricts (empty = nothing)
+        qs = qs.filter(branch_id__in=[branch] if isinstance(branch, int) else list(branch))
     return qs
 
 
@@ -78,11 +78,23 @@ def balance_sheet(org, as_of=None, branch=None):
     equity, total_equity = _section(org, net, [AccountType.EQUITY], -1)
     _, income = _section(org, net, [AccountType.INCOME], -1)
     _, expense = _section(org, net, [AccountType.EXPENSE], +1)
-    earnings = income - expense  # cumulative profit not yet closed into equity (there is no period close yet)
+    earnings = income - expense  # cumulative profit; no closing journal is ever posted, so it is shown here instead
+    # Split it the way Zoho does: profit of earlier fiscal years carried forward vs profit of the current fiscal year.
+    from datetime import date as _date
+
+    from apps.organizations.fiscal import fiscal_year_bounds
+
+    start = fiscal_year_bounds(as_of or _date.today(), org.fiscal_year_start_month)[0]
+    prior_net = _net_by_account(org, None, start - timedelta(days=1), branch)
+    prior = Z
+    for a in Account.objects.filter(organization=org, type__in=[AccountType.INCOME, AccountType.EXPENSE]):
+        dr, cr = prior_net.get(a.id, (Z, Z))
+        prior += (cr - dr)
     total_le = total_liabilities + total_equity + earnings
     return {"as_of": as_of, "assets": assets, "total_assets": total_assets, "liabilities": liabilities,
             "total_liabilities": total_liabilities, "equity": equity, "total_equity": total_equity,
-            "current_period_earnings": earnings, "total_liabilities_and_equity": total_le,
+            "current_period_earnings": earnings, "retained_earnings_prior_years": prior,
+            "current_year_earnings": earnings - prior, "total_liabilities_and_equity": total_le,
             "balanced": total_assets == total_le}
 
 
@@ -93,7 +105,7 @@ def bucket_labels(bounds):
     return labels
 
 
-def aging(org, direction, as_of, party=None, bounds=(30, 60, 90)):
+def aging(org, direction, as_of, party=None, bounds=(30, 60, 90), branch=None):
     """Invoice-level aging by days past due as of `as_of`, from allocations (not party-level balances).
 
     `unapplied` = ledger balance - invoice outstanding: unapplied receipts/payments and journal
@@ -101,7 +113,7 @@ def aging(org, direction, as_of, party=None, bounds=(30, 60, 90)):
     """
     labels = bucket_labels(bounds)
     edges = [as_of - timedelta(days=b) for b in bounds]  # due on/after edges[i] => within bucket i+1
-    inv = outstanding_invoices(org, direction, party=party, as_of=as_of).annotate(eff_due=Coalesce("due_date", "date"))
+    inv = outstanding_invoices(org, direction, party=party, as_of=as_of, branch=branch).annotate(eff_due=Coalesce("due_date", "date"))
     inv = inv.exclude(outstanding=0)
     aggs = {"b0": Sum("outstanding", filter=Q(eff_due__gte=as_of))}
     previous = as_of
@@ -111,7 +123,7 @@ def aging(org, direction, as_of, party=None, bounds=(30, 60, 90)):
     aggs[f"b{len(edges) + 1}"] = Sum("outstanding", filter=Q(eff_due__lt=previous))
     rows = {r["party_id"]: r for r in inv.values("party_id", "party__name").annotate(**aggs, n=Count("id"))}
 
-    ledger = party_balances(org, party_id=party, as_of=as_of)
+    ledger = party_balances(org, party_id=party, as_of=as_of, branch=branch)
     key = "receivable" if direction == "receipt" else "payable"
     from apps.parties.models import Party
 
@@ -137,10 +149,10 @@ def aging(org, direction, as_of, party=None, bounds=(30, 60, 90)):
             "totals": {"buckets": totals, "outstanding": t_out, "unapplied": t_unapplied, "ledger_balance": t_ledger}}
 
 
-def vendor_report(org, date_from=None, date_to=None, party=None):
+def vendor_report(org, date_from=None, date_to=None, party=None, branch=None):
     """Per supplier: opening payable, purchases, returns, payments, other adjustments, closing payable.
     Derived from Accounts Payable ledger lines so it always equals the supplier's ledger balance."""
-    lines = JournalLine.objects.filter(organization=org, party__isnull=False, account__system_code="ACCOUNTS_PAYABLE")
+    lines = _lines(org, branch=branch).filter(party__isnull=False, account__system_code="ACCOUNTS_PAYABLE")
     if date_to:
         lines = lines.filter(date__lte=date_to)
     if party:
@@ -174,8 +186,10 @@ def vendor_report(org, date_from=None, date_to=None, party=None):
     return {"date_from": date_from, "date_to": date_to, "rows": out, "totals": {k: sum((r[k] for r in out), Z) for k in keys}}
 
 
-def sales_summary(org, date_from=None, date_to=None, party=None, group_by="month"):
+def sales_summary(org, date_from=None, date_to=None, party=None, group_by="month", branch=None):
     qs = SalesInvoice.objects.filter(organization=org, status="posted")
+    if branch is not None:
+        qs = qs.filter(branch_id__in=[branch] if isinstance(branch, int) else list(branch))
     if date_from:
         qs = qs.filter(date__gte=date_from)
     if date_to:

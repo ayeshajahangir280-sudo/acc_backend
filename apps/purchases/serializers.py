@@ -19,7 +19,7 @@ class PurchaseInvoiceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseInvoice
         fields = ["id", "number", "kind", "date", "party", "party_name", "original", "due_date", "subtotal", "tax_total", "total",
-                  "status", "narration"]
+                  "status", "narration", "branch"]
 
 
 class PurchaseInvoiceSerializer(PurchaseInvoiceListSerializer):
@@ -30,7 +30,7 @@ class PurchaseInvoiceSerializer(PurchaseInvoiceListSerializer):
     idempotency_key = serializers.CharField(max_length=64, required=False, allow_null=True, write_only=True)
 
     class Meta(PurchaseInvoiceListSerializer.Meta):
-        fields = PurchaseInvoiceListSerializer.Meta.fields + ["items", "branch", "idempotency_key"]
+        fields = PurchaseInvoiceListSerializer.Meta.fields + ["items", "idempotency_key"]
         read_only_fields = ["number", "subtotal", "tax_total", "total", "status"]
 
     def validate(self, attrs):
@@ -40,5 +40,13 @@ class PurchaseInvoiceSerializer(PurchaseInvoiceListSerializer):
             obj = attrs.get(key)
             if obj is not None and obj.organization_id != org.id:
                 raise serializers.ValidationError({key: "Not found."})
+        # A restricted user may not reference (e.g. return against) an invoice of a branch they cannot reach.
+        original = attrs.get("original")
+        request = self.context.get("request")
+        if original is not None and request is not None:
+            from apps.organizations.access import branch_visible
+
+            if not branch_visible(request, original.branch_id):
+                raise serializers.ValidationError({"original": "Not found."})
         return attrs
 

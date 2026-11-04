@@ -19,7 +19,7 @@ KINDS = {
 }
 
 
-def outstanding_invoices(org, direction, party=None, as_of=None, invoice_ids=None):
+def outstanding_invoices(org, direction, party=None, as_of=None, invoice_ids=None, branch=None):
     """Posted invoices of `org` annotated with allocated / returned / outstanding (as of a date if given)."""
     inv, alloc, doc = KINDS[direction]
     a = alloc.objects.filter(invoice=OuterRef("pk"), **{f"{doc}__status": "posted"})
@@ -39,4 +39,6 @@ def outstanding_invoices(org, direction, party=None, as_of=None, invoice_ids=Non
         qs = qs.filter(date__lte=as_of)
     if invoice_ids is not None:
         qs = qs.filter(pk__in=invoice_ids)
+    if branch is not None:  # None = all branches; an iterable of ids (possibly empty) restricts to those
+        qs = qs.filter(branch_id__in=[branch] if isinstance(branch, int) else list(branch))
     return qs

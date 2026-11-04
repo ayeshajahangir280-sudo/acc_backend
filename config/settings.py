@@ -52,6 +52,8 @@ INSTALLED_APPS = [
     "apps.purchases",
     "apps.treasury",
     "apps.vouchers",
+    "apps.expenses",
+    "apps.banking",
     "apps.reports",
     "apps.inventory",
     "apps.dispatch",
@@ -111,6 +113,8 @@ TIME_ZONE = "Asia/Dubai"  # fixed for the UAE; intentionally not configurable vi
 USE_I18N = True
 USE_TZ = True
 
+MEDIA_ROOT = Path(os.environ.get("DJANGO_MEDIA_ROOT", str(BASE_DIR / "media")))
+MEDIA_URL = "media/"  # files are served only through authenticated API endpoints, never directly
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 

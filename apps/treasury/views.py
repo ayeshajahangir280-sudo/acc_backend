@@ -19,10 +19,12 @@ class _OpenInvoiceSerializer(serializers.Serializer):
     allocated = serializers.DecimalField(max_digits=18, decimal_places=2)
     returned = serializers.DecimalField(max_digits=18, decimal_places=2)
     outstanding = serializers.DecimalField(max_digits=18, decimal_places=2)
+    branch = serializers.IntegerField(source="branch_id", allow_null=True)
 
 
 class _CashViewSet(OrgCreateReadViewSet):
     direction = None
+    branch_scoped = True
     filterset_fields = {"date": ["gte", "lte"], "party": ["exact"], "method": ["exact"], "status": ["exact"]}
     search_fields = ["number", "reference", "party__name", "narration"]
     ordering_fields = ["date", "number", "amount"]
@@ -31,8 +33,10 @@ class _CashViewSet(OrgCreateReadViewSet):
         return super().get_queryset().prefetch_related("allocations__invoice")
 
     def _check_invoices(self, allocations):
+        from apps.organizations.access import branch_visible
+
         for a in allocations:
-            if a["invoice"].organization_id != self.request.organization.id:
+            if a["invoice"].organization_id != self.request.organization.id or not branch_visible(self.request, a["invoice"].branch_id):
                 raise serializers.ValidationError({"allocations": "Invoice not found."})
 
     def create(self, request, *args, **kwargs):
@@ -56,8 +60,10 @@ class _CashViewSet(OrgCreateReadViewSet):
     @action(detail=False, methods=["get"], url_path="open-invoices")
     def open_invoices(self, request):
         """Invoices of one party that still have an outstanding balance (oldest due first)."""
+        from apps.organizations.access import request_scope
+
         qs = outstanding_invoices(request.organization, self.direction, party=request.query_params.get("party"),
-                                  as_of=request.query_params.get("as_of"))
+                                  as_of=request.query_params.get("as_of"), branch=request_scope(request))
         return Response(_OpenInvoiceSerializer(qs.filter(outstanding__gt=0).order_by("due_date", "id"), many=True).data)
 
     @action(detail=True, methods=["post"])

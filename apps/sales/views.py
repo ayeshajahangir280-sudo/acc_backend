@@ -11,6 +11,7 @@ from .serializers import SalesInvoiceListSerializer, SalesInvoiceSerializer
 class SalesInvoiceViewSet(OrgCreateReadViewSet):
     """Sales register (list/filter) + create + void. Posted documents are never edited or deleted."""
 
+    branch_scoped = True
     queryset = SalesInvoice.objects.select_related("party").order_by("-date", "-id")
     filterset_fields = {"date": ["gte", "lte"], "party": ["exact"], "kind": ["exact"], "status": ["exact"]}
     search_fields = ["number", "party__name", "narration"]

@@ -41,7 +41,14 @@ def _contra(lines):
         raise DomainError("A contra voucher must transfer between two different accounts.", "contra_same_account")
 
 
-RULES = {"journal": _journal, "general": _general, "contra": _contra}
+def _opening(lines):
+    """Opening balances are balance-sheet balances brought forward; profit-and-loss accounts start the year empty."""
+    for l in lines:
+        if l["account"].type in ("income", "expense"):
+            raise DomainError("Opening balances can only use asset, liability or equity accounts.", "opening_account_type")
+
+
+RULES = {"journal": _journal, "general": _general, "contra": _contra, "opening": _opening}
 
 
 def validate(vtype, lines):

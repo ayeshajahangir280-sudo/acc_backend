@@ -51,6 +51,8 @@ def create_document(org, user, *, kind, party, date, items, branch=None, narrati
         if (original.organization_id != org.id or original.kind != PurchaseInvoice.Kind.INVOICE
                 or original.status != DocStatus.POSTED or original.party_id != party.id):
             raise DomainError("Original must be a posted invoice of the same supplier.", "invalid_original")
+        if (branch.id if branch else None) != original.branch_id:
+            raise DomainError("A return must be posted to the same branch as the original invoice.", "branch_mismatch")
         returned = original.returns.filter(status=DocStatus.POSTED).aggregate(s=Sum("total"))["s"] or Decimal("0")
         if returned + total > original.total:
             raise DomainError(f"Return exceeds the original invoice. Returnable: {original.total - returned}.", "over_return")

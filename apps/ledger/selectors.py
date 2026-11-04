@@ -6,7 +6,15 @@ from django.db.models import Q, Sum
 from .models import JournalLine
 
 
-def party_balances(org, party_id=None, as_of=None):
+def _in_branches(qs, branch):
+    """branch: None = all; an int or an iterable of ids = only those (an empty iterable matches nothing)."""
+    if branch is None:
+        return qs
+    ids = [branch] if isinstance(branch, int) else list(branch)
+    return qs.filter(branch_id__in=ids)
+
+
+def party_balances(org, party_id=None, as_of=None, branch=None):
     """Returns {party_id: {"receivable": Decimal, "payable": Decimal}} from AR/AP ledger lines.
 
     receivable = debit - credit on Accounts Receivable; payable = credit - debit on Accounts Payable.
@@ -18,6 +26,7 @@ def party_balances(org, party_id=None, as_of=None):
         qs = qs.filter(party_id=party_id)
     if as_of:
         qs = qs.filter(date__lte=as_of)
+    qs = _in_branches(qs, branch)
     rows = qs.values("party_id").annotate(
         ar_dr=Sum("debit", filter=Q(account__system_code="ACCOUNTS_RECEIVABLE")),
         ar_cr=Sum("credit", filter=Q(account__system_code="ACCOUNTS_RECEIVABLE")),
@@ -34,10 +43,11 @@ def party_balances(org, party_id=None, as_of=None):
     }
 
 
-def account_balances(org, as_of=None):
+def account_balances(org, as_of=None, branch=None):
     qs = JournalLine.objects.filter(organization=org)
     if as_of:
         qs = qs.filter(date__lte=as_of)
+    qs = _in_branches(qs, branch)
     return {
         r["account_id"]: (r["dr"] or Decimal("0"), r["cr"] or Decimal("0"))
         for r in qs.values("account_id").annotate(dr=Sum("debit"), cr=Sum("credit"))

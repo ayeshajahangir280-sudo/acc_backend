@@ -43,9 +43,15 @@ class _Base(serializers.ModelSerializer):
 
     def validate(self, attrs):
         org = self.context["organization"]
+        request = self.context.get("request")
         for a in attrs.get("allocations", []):
             if a["invoice"].organization_id != org.id:
                 raise serializers.ValidationError({"allocations": "Invoice not found."})
+            if request is not None:
+                from apps.organizations.access import branch_visible
+
+                if not branch_visible(request, a["invoice"].branch_id):
+                    raise serializers.ValidationError({"allocations": "Invoice not found."})
         for key in ("party", "counter_account", "cash_account", "branch"):
             obj = attrs.get(key)
             if obj is not None and obj.organization_id != org.id:

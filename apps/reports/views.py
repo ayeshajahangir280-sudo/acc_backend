@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import IsOrgMember
+from apps.organizations.access import report_branch
 
 from . import selectors
 
@@ -46,18 +47,18 @@ class _Report(APIView):
 
 class TrialBalanceView(_Report):
     def get(self, request):
-        return Response(selectors.trial_balance(request.organization, _date(request, "as_of"), _int(request, "branch")))
+        return Response(selectors.trial_balance(request.organization, _date(request, "as_of"), report_branch(request)))
 
 
 class ProfitLossView(_Report):
     def get(self, request):
         start, end = _range(request)
-        return Response(selectors.profit_and_loss(request.organization, start, end, _int(request, "branch")))
+        return Response(selectors.profit_and_loss(request.organization, start, end, report_branch(request)))
 
 
 class BalanceSheetView(_Report):
     def get(self, request):
-        return Response(selectors.balance_sheet(request.organization, _date(request, "as_of"), _int(request, "branch")))
+        return Response(selectors.balance_sheet(request.organization, _date(request, "as_of"), report_branch(request)))
 
 
 class AgingView(_Report):
@@ -74,13 +75,13 @@ class AgingView(_Report):
             raise ValidationError({"buckets": "Between 1 and 5 strictly increasing positive numbers."})
         as_of = _date(request, "as_of", timezone.localdate())
         return Response(selectors.aging(request.organization, "receipt" if kind == "receivable" else "payment",
-                                        as_of, _int(request, "party"), bounds))
+                                        as_of, _int(request, "party"), bounds, report_branch(request)))
 
 
 class VendorReportView(_Report):
     def get(self, request):
         start, end = _range(request)
-        return Response(selectors.vendor_report(request.organization, start, end, _int(request, "party")))
+        return Response(selectors.vendor_report(request.organization, start, end, _int(request, "party"), report_branch(request)))
 
 
 class SalesSummaryView(_Report):
@@ -89,10 +90,10 @@ class SalesSummaryView(_Report):
         if group not in ("day", "month", "customer"):
             raise ValidationError({"group_by": "Use day, month or customer."})
         start, end = _range(request)
-        return Response(selectors.sales_summary(request.organization, start, end, _int(request, "party"), group))
+        return Response(selectors.sales_summary(request.organization, start, end, _int(request, "party"), group, report_branch(request)))
 
 
 class VatSummaryView(_Report):
     def get(self, request):
         start, end = _range(request)
-        return Response(selectors.vat_summary(request.organization, start, end, _int(request, "branch")))
+        return Response(selectors.vat_summary(request.organization, start, end, report_branch(request)))

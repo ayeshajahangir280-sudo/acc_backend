@@ -67,11 +67,32 @@ def _validate(org, lines):
         raise DomainError(f"Entry is not balanced: debit {total_dr} != credit {total_cr}.", "unbalanced")
 
 
+def assert_period_open(org, date):
+    """Raise DomainError if `date` falls in a locked period (on or before org.books_locked_through).
+
+    Reads the lock from the database rather than the request-scoped `org` object, so a lock set while a request
+    is in flight is still honoured. Every posting and voiding path goes through post_journal / void_journal,
+    so this is the single enforcement point for all financial documents.
+    """
+    from apps.organizations.models import Organization
+
+    locked = Organization.objects.filter(pk=org.pk).values_list("books_locked_through", flat=True).first()
+    if locked is not None and date <= locked:
+        raise DomainError(
+            f"The books are locked through {locked.isoformat()}; nothing dated on or before that day can be posted or voided.",
+            "period_locked",
+        )
+
+
 @transaction.atomic
 def post_journal(org, date, lines, source_type, source_id=None, reference="", narration="", branch=None, user=None):
     _validate(org, lines)
+    assert_period_open(org, date)
     if branch is not None and branch.organization_id != org.id:
         raise DomainError("Branch does not belong to this organization.", "invalid_branch")
+    from apps.organizations.access import assert_can_post
+
+    assert_can_post(org, user, branch)
     txn = JournalTransaction.objects.create(
         organization=org, date=date, branch=branch, source_type=source_type, source_id=source_id,
         reference=reference, narration=narration, created_by=user,
@@ -92,6 +113,14 @@ def void_journal(txn, user=None):
     txn = JournalTransaction.objects.select_for_update().get(pk=txn.pk)
     if txn.status == DocStatus.VOID:
         raise DomainError("Already void.", "already_void")
+    # The reversal carries the original date, so voiding a locked-period document would rewrite closed books.
+    assert_period_open(txn.organization, txn.date)
+    from apps.organizations.access import assert_can_void
+
+    assert_can_void(txn.organization, user, txn.branch_id)
+    from apps.banking.services import assert_not_reconciled
+
+    assert_not_reconciled(txn)  # a transaction cleared in a reconciled bank statement cannot be voided underneath it
     mirror = JournalTransaction.objects.create(
         organization=txn.organization, date=txn.date, branch=txn.branch, source_type=txn.source_type,
         source_id=txn.source_id, reference=txn.reference, narration=f"Reversal of {txn.reference}".strip(),

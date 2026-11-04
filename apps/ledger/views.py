@@ -21,7 +21,9 @@ class AccountViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def balances(self, request):
-        bal = selectors.account_balances(request.organization, request.query_params.get("as_of"))
+        from apps.organizations.access import request_scope
+
+        bal = selectors.account_balances(request.organization, request.query_params.get("as_of"), request_scope(request))
         return Response(
             [
                 {"account": a.id, "code": a.code, "name": a.name, "type": a.type, "is_cash_bank": a.is_cash_bank,
@@ -32,6 +34,7 @@ class AccountViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 
 
 class JournalViewSet(OrgReadOnlyViewSet):
+    branch_scoped = True
     queryset = JournalTransaction.objects.prefetch_related("lines__account").order_by("-date", "-id")
     serializer_class = JournalTransactionSerializer
     filterset_fields = {"date": ["gte", "lte"], "source_type": ["exact"], "status": ["exact"]}
@@ -40,7 +43,9 @@ class JournalViewSet(OrgReadOnlyViewSet):
 
 class PartyBalanceViewSet(OrgScopedMixin, viewsets.ViewSet):
     def list(self, request):
-        bal = selectors.party_balances(request.organization, as_of=request.query_params.get("as_of"))
+        from apps.organizations.access import request_scope
+
+        bal = selectors.party_balances(request.organization, as_of=request.query_params.get("as_of"), branch=request_scope(request))
         parties = Party.objects.filter(organization=request.organization, id__in=bal.keys()).order_by("name")
         return Response(
             [{"party": p.id, "name": p.name, "kind": p.kind, **bal[p.id]} for p in parties]

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Branch, Membership, Organization
+from .models import Branch, BranchAccess, Membership, Organization
 
 
 class BranchInline(admin.TabularInline):
@@ -41,3 +41,10 @@ class MembershipAdmin(admin.ModelAdmin):
     list_filter = ("role", "organization")
     search_fields = ("user__username", "organization__name")
     autocomplete_fields = ["user"]
+
+
+@admin.register(BranchAccess)
+class BranchAccessAdmin(admin.ModelAdmin):
+    list_display = ("membership", "branch")
+    list_filter = ("branch__organization",)
+    search_fields = ("membership__user__username", "branch__name")

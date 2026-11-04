@@ -9,6 +9,7 @@ class Voucher(DocumentBase):
         GENERAL = "general", "General Voucher"
         JOURNAL = "journal", "Journal Voucher"
         CONTRA = "contra", "Contra Voucher"
+        OPENING = "opening", "Opening Balances"
 
     type = models.CharField(max_length=10, choices=Type.choices)
     total = models.DecimalField(max_digits=18, decimal_places=2)

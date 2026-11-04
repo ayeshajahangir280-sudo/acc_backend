@@ -11,6 +11,7 @@ from .serializers import PurchaseInvoiceListSerializer, PurchaseInvoiceSerialize
 class PurchaseInvoiceViewSet(OrgCreateReadViewSet):
     """Purchase register (list/filter) + create + void. Posted documents are never edited or deleted."""
 
+    branch_scoped = True
     queryset = PurchaseInvoice.objects.select_related("party").order_by("-date", "-id")
     filterset_fields = {"date": ["gte", "lte"], "party": ["exact"], "kind": ["exact"], "status": ["exact"]}
     search_fields = ["number", "party__name", "narration"]

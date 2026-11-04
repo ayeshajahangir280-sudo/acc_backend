@@ -1,6 +1,8 @@
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
+from apps.core.permissions import ADMIN_ROLES
 from apps.core.views import OrgCreateReadViewSet
 
 from . import services
@@ -11,6 +13,7 @@ from .serializers import VoucherListSerializer, VoucherSerializer
 class VoucherViewSet(OrgCreateReadViewSet):
     """General / Journal / Contra vouchers. Filter registers with ?type=general|journal|contra."""
 
+    branch_scoped = True
     queryset = Voucher.objects.order_by("-date", "-id")
     filterset_fields = {"date": ["gte", "lte"], "type": ["exact"], "status": ["exact"]}
     search_fields = ["number", "narration"]
@@ -27,6 +30,8 @@ class VoucherViewSet(OrgCreateReadViewSet):
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
+        if d["type"] == "opening" and request.membership.role not in ADMIN_ROLES:
+            raise PermissionDenied("Only owners/admins can enter opening balances.")
         v, created = services.create_voucher(
             request.organization, request.user, d["type"], date=d["date"], lines=d["lines"],
             narration=d.get("narration", ""), branch=d.get("branch"), idempotency_key=d.get("idempotency_key"),

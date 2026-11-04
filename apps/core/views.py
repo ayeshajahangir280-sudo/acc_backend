@@ -13,9 +13,15 @@ class OrgScopedMixin:
     """Restricts every queryset to request.organization and injects it on create."""
 
     permission_classes = [IsOrgMember]
+    branch_scoped = False  # set True on viewsets whose model has a `branch` FK; restricted users then see only their branches
 
     def get_queryset(self):
-        return super().get_queryset().filter(organization=self.request.organization)
+        qs = super().get_queryset().filter(organization=self.request.organization)
+        if self.branch_scoped:
+            from apps.organizations.access import scope_queryset
+
+            qs = scope_queryset(qs, self.request)
+        return qs
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
