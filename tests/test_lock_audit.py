@@ -90,7 +90,8 @@ class LockAuditTests(OpeningBase):
             self.assertEqual(go(self.client, "2026-12-31").data["code"], "reopen_in_order")
             self.assertEqual(go(self.client, "2027-12-31").status_code, 200)
             self.assertEqual(self.lock(), date(2026, 12, 31))
-            self.assertEqual(go(self.client, "2027-12-31").data["code"], "reopen_in_order")       # already reopened
+            self.assertEqual(go(self.client, "2027-12-31").data["code"], "already_reopened")
+            self.assertEqual(go(self.client, "2020-12-31").data["code"], "year_not_closed")
             # lock moved by hand after the close: reopen refuses rather than guess
             self.client.patch(self.org_url(), {"books_locked_through": "2027-02-01"}, format="json")
             self.assertEqual(go(self.client, "2026-12-31").data["code"], "lock_changed")

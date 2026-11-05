@@ -81,6 +81,11 @@ def reopen_fiscal_year(org, user, year_end, reason):
         locked_org = Organization.objects.select_for_update().get(pk=org.pk)
         last = FiscalYearClose.objects.select_for_update().filter(organization=locked_org, reopened_at__isnull=True).order_by("-year_end").first()
         if last is None or last.year_end != year_end:
+            record = FiscalYearClose.objects.filter(organization=locked_org, year_end=year_end).order_by("-id").first()
+            if record is not None and record.reopened_at is not None:
+                raise DomainError(f"The fiscal year ending {year_end} has already been reopened.", "already_reopened")
+            if record is None:
+                raise DomainError(f"No closed fiscal year ends on {year_end}.", "year_not_closed")
             raise DomainError("Only the most recently closed fiscal year can be reopened.", "reopen_in_order")
         if locked_org.books_locked_through != last.year_end:
             raise DomainError("The lock date was changed after this year was closed; adjust the lock date directly.", "lock_changed")
