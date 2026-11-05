@@ -39,6 +39,60 @@ def fiscal_year_status(org):
     return nxt, list(FiscalYearClose.objects.filter(organization=org))
 
 
+def record_lock_change(org, old, new, source, user, reason=""):
+    from .models import PeriodLockChange
+
+    return PeriodLockChange.objects.create(organization=org, old_value=old, new_value=new, source=source, changed_by=user, reason=(reason or "")[:300])
+
+
+def change_lock_manually(org, user, old, new, reason):
+    """Rules for editing the lock date by hand. Moving it forward is routine. Moving it back (or clearing it) reopens
+    settled periods, so it needs a reason, is recorded, and may not go back past a closed fiscal year: that has its own
+    reopen step. Call with the organization row locked."""
+    from apps.core.errors import DomainError
+
+    from .models import FiscalYearClose
+
+    reason = (reason or "").strip()
+    lowering = old is not None and (new is None or new < old)
+    if lowering:
+        if len(reason) < 3:
+            raise DomainError("Give a reason for reopening closed periods.", "reason_required")
+        last_close = FiscalYearClose.objects.filter(organization=org, reopened_at__isnull=True).order_by("-year_end").first()
+        if last_close is not None and (new is None or new < last_close.year_end):
+            raise DomainError(f"Fiscal year ending {last_close.year_end} is closed. Reopen it from the fiscal-year page instead.", "fiscal_year_closed")
+    record_lock_change(org, old, new, "manual", user, reason)
+
+
+def reopen_fiscal_year(org, user, year_end, reason):
+    """Undo the most recent fiscal-year close: restore the lock date it replaced. Owner only (checked by the view). The
+    close record stays, marked reopened, and the change is written to the lock audit trail."""
+    from django.db import transaction
+    from django.utils import timezone
+
+    from apps.core.errors import DomainError
+
+    from .models import FiscalYearClose, Organization
+
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise DomainError("Give a reason for reopening the fiscal year.", "reason_required")
+    with transaction.atomic():
+        locked_org = Organization.objects.select_for_update().get(pk=org.pk)
+        last = FiscalYearClose.objects.select_for_update().filter(organization=locked_org, reopened_at__isnull=True).order_by("-year_end").first()
+        if last is None or last.year_end != year_end:
+            raise DomainError("Only the most recently closed fiscal year can be reopened.", "reopen_in_order")
+        if locked_org.books_locked_through != last.year_end:
+            raise DomainError("The lock date was changed after this year was closed; adjust the lock date directly.", "lock_changed")
+        old = locked_org.books_locked_through
+        last.reopened_at, last.reopened_by, last.reopen_reason = timezone.now(), user, reason[:300]
+        last.save(update_fields=["reopened_at", "reopened_by", "reopen_reason", "updated_at"])
+        locked_org.books_locked_through = last.previous_lock
+        locked_org.save(update_fields=["books_locked_through", "updated_at"])
+        record_lock_change(locked_org, old, last.previous_lock, "fiscal_reopen", user, reason)
+        return last
+
+
 def close_fiscal_year(org, user, year_end):
     """Lock the books through `year_end` and record the year's profit. No closing journal is posted: profit and loss
     stay readable for the year, and the balance sheet carries the profit forward as prior-year retained earnings."""
@@ -80,4 +134,5 @@ def close_fiscal_year(org, user, year_end):
                                              previous_lock=locked_org.books_locked_through, closed_by=user)
         locked_org.books_locked_through = year_end
         locked_org.save(update_fields=["books_locked_through", "updated_at"])
+        record_lock_change(locked_org, rec.previous_lock, year_end, "fiscal_close", user, f"Fiscal year {start} to {year_end} closed")
         return rec

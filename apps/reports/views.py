@@ -97,3 +97,9 @@ class VatSummaryView(_Report):
     def get(self, request):
         start, end = _range(request)
         return Response(selectors.vat_summary(request.organization, start, end, report_branch(request)))
+
+
+class VatReturnView(_Report):
+    def get(self, request):
+        start, end = _range(request)
+        return Response(selectors.vat_return(request.organization, start, end, report_branch(request)))

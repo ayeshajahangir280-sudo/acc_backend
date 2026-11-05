@@ -22,7 +22,7 @@ SPEC = {
 @retry_on_key_conflict
 @transaction.atomic
 def create_cash_document(org, user, direction, *, date, amount, cash_account, party=None, counter_account=None,
-                         method="cash", reference="", narration="", branch=None, idempotency_key=None, allocations=()):
+                         method="cash", reference="", narration="", branch=None, idempotency_key=None, allocations=(), tax_rate=0):
     model, prefix, kinds, control_code = SPEC[direction]
     existing = find_existing(model, org, idempotency_key)
     if existing:
@@ -43,17 +43,29 @@ def create_cash_document(org, user, direction, *, date, amount, cash_account, pa
             raise DomainError("Invalid counter account.", "invalid_account")
         other = Line(counter_account)
 
+    tax_rate = Decimal(str(tax_rate or 0))
+    if not (0 <= tax_rate <= 100):
+        raise DomainError("Tax rate must be between 0 and 100.", "invalid_tax_rate")
+    if tax_rate and party is not None:
+        raise DomainError("VAT applies to receipts/payments posted to an account, not to invoice settlements (the invoice already carries it).", "tax_with_party")
+    tax = money(amount * tax_rate / (100 + tax_rate)) if tax_rate else Decimal("0")
     doc = model.objects.create(
         organization=org, number=next_number(org, f"treasury.{direction}", prefix), date=date, branch=branch,
         narration=narration, party=party, counter_account=counter_account, cash_account=cash_account, amount=amount,
         method=method, reference=reference, idempotency_key=idempotency_key or None, created_by=user,
+        tax_rate=tax_rate, tax_total=tax,
     )
     cash = Line(cash_account)
+    lines = [cash, other]
     if direction == "receipt":
-        cash.debit, other.credit = amount, amount
+        cash.debit, other.credit = amount, amount - tax
+        if tax:
+            lines.append(Line(system_account(org, "TAX_OUTPUT"), credit=tax))
     else:
-        other.debit, cash.credit = amount, amount
-    doc.journal = post_journal(org, date, [cash, other], f"treasury.{direction}", doc.id, doc.number, narration, branch, user)
+        other.debit, cash.credit = amount - tax, amount
+        if tax:
+            lines.append(Line(system_account(org, "TAX_INPUT"), debit=tax))
+    doc.journal = post_journal(org, date, lines, f"treasury.{direction}", doc.id, doc.number, narration, branch, user)
     doc.save(update_fields=["journal", "updated_at"])
     apply_allocations(org, doc, direction, allocations)
     return doc, True
@@ -114,7 +126,13 @@ def void_cash_document(doc, user=None):
     doc = type(doc).objects.select_for_update().get(pk=doc.pk)
     if doc.status == DocStatus.VOID:
         raise DomainError("Document is already void.", "already_void")
+    from . import credits
+
+    direction = "receipt" if isinstance(doc, Receipt) else "payment"
+    inv_ids = list(doc.allocations.values_list("invoice_id", flat=True))
+    credits.lock_invoices(doc.organization, direction, inv_ids)
     void_journal(doc.journal, user)
     doc.status = DocStatus.VOID
     doc.save(update_fields=["status", "updated_at"])
+    credits.assert_credit_consistent(doc.organization, direction, inv_ids)  # rolls the whole void back if it would orphan credit
     return doc

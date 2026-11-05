@@ -78,7 +78,7 @@ class AdjustmentViewSet(OrgScopedMixin, mixins.CreateModelMixin, viewsets.Generi
         d = ser.validated_data
         m = services.adjust_stock(request.organization, request.user, item=d["item"],
                                   location=d.get("location") or services.default_location(request.organization),
-                                  quantity=d["quantity"], date=d["date"], mtype=d["type"], note=d["note"])
+                                  quantity=d["quantity"], date=d["date"], mtype=d["type"], note=d["note"], unit_cost=d.get("unit_cost"))
         return Response(MovementSerializer(m).data, status=201)
 
 
@@ -108,3 +108,37 @@ class ProductionViewSet(OrgCreateReadViewSet):
     def void(self, request, pk=None):
         order = services.void_production(self.get_object(), request.user)
         return Response(ProductionListSerializer(order).data)
+
+
+class CostingViewSet(OrgScopedMixin, viewsets.ViewSet):
+    """Inventory costing status, one-time enablement (owner/admin) and the valuation/reconciliation report."""
+
+    write_roles = {"owner", "admin"}
+
+    def list(self, request):
+        from apps.organizations.models import Organization
+
+        since = Organization.objects.values_list("inventory_costing_since", flat=True).get(pk=request.organization.pk)
+        return Response({"enabled": since is not None, "since": since})
+
+    @action(detail=False, methods=["post"])
+    def enable(self, request):
+        from rest_framework import serializers as s
+
+        from . import costing
+
+        date = s.DateField().run_validation(request.data.get("date"))
+        raw = request.data.get("costs") or {}
+        if not isinstance(raw, dict):
+            raise s.ValidationError({"costs": "Must map item id to unit cost."})
+        try:
+            costs = {int(k): s.DecimalField(max_digits=18, decimal_places=4).run_validation(v) for k, v in raw.items()}
+        except (ValueError, TypeError):
+            raise s.ValidationError({"costs": "Invalid item id."})
+        return Response(costing.enable_costing(request.organization, request.user, date=date, costs=costs), status=201)
+
+    @action(detail=False, methods=["get"])
+    def valuation(self, request):
+        from . import costing
+
+        return Response(costing.reconcile(request.organization))

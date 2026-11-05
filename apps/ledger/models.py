@@ -21,6 +21,8 @@ class Account(OrgOwned):
     system_code = models.CharField(max_length=40, null=True, blank=True)
     is_cash_bank = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    # Sub-account support: a child rolls up into its parent in balances. Same type as the parent; see ledger.hierarchy.
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
 
     class Meta:
         constraints = [

@@ -13,7 +13,8 @@ from .access import scope_for_membership
 from .models import Branch, BranchAccess, Membership, Organization
 from .serializers import (BranchAccessSerializer, BranchSerializer, FiscalYearCloseSerializer, MembershipSerializer,
                           OrganizationSerializer)
-from .services import close_fiscal_year, create_organization, fiscal_year_status
+from .models import PeriodLockChange
+from .services import change_lock_manually, close_fiscal_year, create_organization, fiscal_year_status, reopen_fiscal_year
 
 
 class OrganizationViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
@@ -48,7 +49,16 @@ class OrganizationViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mi
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Only owners/admins can edit the organization.")
-        serializer.save()
+        from django.db import transaction
+
+        with transaction.atomic():
+            locked = Organization.objects.select_for_update().get(pk=serializer.instance.pk)  # serialises lock changes
+            serializer.instance.refresh_from_db()
+            old = locked.books_locked_through
+            new = serializer.validated_data.get("books_locked_through", old)
+            if new != old:
+                change_lock_manually(locked, self.request.user, old, new, self.request.data.get("lock_change_reason"))
+            serializer.save()
 
 
     @action(detail=True, methods=["get"], url_path="fiscal-years")
@@ -69,6 +79,28 @@ class OrganizationViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mi
         except ValueError:
             raise ValidationError({"year_end": "Send a date as YYYY-MM-DD."})
         return Response(FiscalYearCloseSerializer(close_fiscal_year(org, request.user, year_end)).data, status=201)
+
+
+    @action(detail=True, methods=["post"], url_path="reopen-year")
+    def reopen_year(self, request, pk=None):
+        org = self.get_object()
+        if Membership.objects.get(user=request.user, organization=org).role != "owner":
+            raise PermissionDenied("Only the owner can reopen a fiscal year.")
+        try:
+            year_end = datetime.date.fromisoformat(str(request.data.get("year_end")))
+        except ValueError:
+            raise ValidationError({"year_end": "Send a date as YYYY-MM-DD."})
+        return Response(FiscalYearCloseSerializer(reopen_fiscal_year(org, request.user, year_end, request.data.get("reason"))).data)
+
+    @action(detail=True, methods=["get"], url_path="lock-history")
+    def lock_history(self, request, pk=None):
+        """Who changed the period lock, when, from what to what, and why. Owners and admins only."""
+        org = self.get_object()
+        if Membership.objects.get(user=request.user, organization=org).role not in ADMIN_ROLES:
+            raise PermissionDenied("Only owners/admins can view the lock history.")
+        rows = PeriodLockChange.objects.filter(organization=org).select_related("changed_by")[:200]
+        return Response([{"id": r.id, "at": r.created_at, "old_value": r.old_value, "new_value": r.new_value, "source": r.source,
+                          "reason": r.reason, "by": r.changed_by.username if r.changed_by else None} for r in rows])
 
 
 class BranchViewSet(OrgScopedMixin, viewsets.ModelViewSet):

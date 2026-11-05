@@ -9,8 +9,8 @@ from .models import SalesInvoice, SalesItem
 class SalesItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesItem
-        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross"]
-        read_only_fields = ["net", "tax", "gross"]
+        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross", "item", "stock_value"]
+        read_only_fields = ["net", "tax", "gross", "stock_value"]
 
 
 class SalesInvoiceListSerializer(serializers.ModelSerializer):
@@ -28,9 +28,10 @@ class SalesInvoiceSerializer(SalesInvoiceListSerializer):
     original = serializers.PrimaryKeyRelatedField(queryset=SalesInvoice.objects.all(), required=False, allow_null=True)
     branch = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.all(), required=False, allow_null=True)
     idempotency_key = serializers.CharField(max_length=64, required=False, allow_null=True, write_only=True)
+    billable_expenses = serializers.ListField(child=serializers.IntegerField(), required=False, write_only=True)
 
     class Meta(SalesInvoiceListSerializer.Meta):
-        fields = SalesInvoiceListSerializer.Meta.fields + ["items", "idempotency_key"]
+        fields = SalesInvoiceListSerializer.Meta.fields + ["items", "idempotency_key", "billable_expenses"]
         read_only_fields = ["number", "subtotal", "tax_total", "total", "status"]
 
     def validate(self, attrs):

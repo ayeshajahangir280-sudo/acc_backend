@@ -208,5 +208,9 @@ class FiscalCloseTests(OpeningBase):
 
     def test_lock_can_still_be_reopened_by_admin(self):
         self.client.post(self.url("close-year"), {"year_end": "2026-12-31"}, format="json")
-        self.assertEqual(self.client.patch(f"/api/v1/organizations/{self.bakery.id}/", {"books_locked_through": None}, format="json").status_code, 200)
+        patch_none = lambda **kw: self.client.patch(f"/api/v1/organizations/{self.bakery.id}/", {"books_locked_through": None, **kw}, format="json")
+        self.assertEqual(patch_none().status_code, 400)                                    # needs a reason...
+        self.assertEqual(patch_none(lock_change_reason="redo").data["code"], "fiscal_year_closed")   # ...and a closed year has its own reopen step
+        r = self.client.post(self.url("reopen-year"), {"year_end": "2026-12-31", "reason": "redo"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(self.sale(date="2026-12-31").status_code, 201)

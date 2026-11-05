@@ -9,7 +9,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Organization
-        fields = ["id", "name", "legal_name", "base_currency", "fiscal_year_start_month", "books_locked_through", "is_active", "role"]
+        fields = ["id", "name", "legal_name", "base_currency", "fiscal_year_start_month", "books_locked_through", "is_active", "role",
+                  "expense_approval_required", "bill_approval_required", "approval_min_amount"]
         read_only_fields = ["is_active"]
 
     def get_role(self, obj):
@@ -32,7 +33,7 @@ class FiscalYearCloseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FiscalYearClose
-        fields = ["id", "year_start", "year_end", "net_profit", "previous_lock", "closed_by_name", "created_at"]
+        fields = ["id", "year_start", "year_end", "net_profit", "previous_lock", "closed_by_name", "created_at", "reopened_at", "reopen_reason"]
 
 
 class BranchSerializer(serializers.ModelSerializer):

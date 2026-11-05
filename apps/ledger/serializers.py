@@ -1,14 +1,18 @@
 from rest_framework import serializers
 
+from . import hierarchy
 from .models import Account, JournalLine, JournalTransaction
 
 
 class AccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
-        fields = ["id", "code", "name", "type", "system_code", "is_cash_bank", "is_active"]
+        fields = ["id", "code", "name", "type", "system_code", "is_cash_bank", "is_active", "parent", "parent_name"]
         read_only_fields = ["system_code"]
         validators = []
+
+    parent = serializers.PrimaryKeyRelatedField(queryset=Account.objects.all(), required=False, allow_null=True)
+    parent_name = serializers.CharField(source="parent.name", read_only=True, default=None)
 
     def validate_code(self, v):
         qs = Account.objects.filter(organization=self.context["organization"], code=v)
@@ -19,7 +23,10 @@ class AccountSerializer(serializers.ModelSerializer):
         return v
 
     def create(self, validated_data):
-        return Account.objects.create(organization=self.context["organization"], **validated_data)
+        return hierarchy.create_account(self.context["organization"], **validated_data)
+
+    def update(self, instance, validated_data):
+        return hierarchy.update_account(self.context["organization"], instance, **validated_data)
 
 
 class JournalLineSerializer(serializers.ModelSerializer):

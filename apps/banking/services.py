@@ -10,7 +10,7 @@ from apps.core.errors import DomainError
 from apps.core.models import DocStatus
 from apps.ledger.models import Account, JournalLine
 
-from . import importer
+from . import formats, importer
 from .models import BankStatement, StatementLine, StatementMatch
 
 ZERO = Decimal("0.00")
@@ -44,7 +44,7 @@ def line_status(line, matched):
 def import_statement(org, user, *, account, raw, file_name, opening_balance, closing_balance, date_format="iso", skip_duplicates=False):
     if account.organization_id != org.id or not account.is_cash_bank or not account.is_active:
         raise DomainError("Choose an active cash or bank account of this organization.", "invalid_account")
-    rows, errors = importer.parse_statement(raw, date_format)
+    rows, errors = formats.parse_any(raw, file_name, date_format)
     if errors:
         raise DomainError(f"The file has {len(errors)} invalid row(s); nothing was imported. First problem: row {errors[0]['row']}: {errors[0]['error']}.",
                           "invalid_rows", extra={"errors": errors[:20], "error_count": len(errors)})

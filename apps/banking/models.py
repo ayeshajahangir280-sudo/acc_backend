@@ -66,3 +66,27 @@ class StatementMatch(OrgOwned):
             models.UniqueConstraint(fields=["line", "journal_line"], name="uniq_match_pair"),
             models.CheckConstraint(condition=Q(amount__gt=0), name="match_amount_positive"),
         ]
+
+
+class BankRule(OrgOwned):
+    """Suggests a category (ledger account) for unmatched statement lines whose description contains some text.
+
+    A rule only suggests. Nothing is posted until a person confirms a line (`create-from-line`)."""
+
+    class Direction(models.TextChoices):
+        IN = "in", "Money in"
+        OUT = "out", "Money out"
+        ANY = "any", "Either"
+
+    name = models.CharField(max_length=120)
+    account = models.ForeignKey("ledger.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+")  # limit to one bank account
+    direction = models.CharField(max_length=3, choices=Direction.choices, default=Direction.ANY)
+    contains = models.CharField(max_length=100)
+    category = models.ForeignKey("ledger.Account", on_delete=models.PROTECT, related_name="+")
+    tax_rate = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    priority = models.PositiveSmallIntegerField(default=100)  # lower runs first
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["priority", "id"]
+        indexes = [models.Index(fields=["organization", "is_active"])]

@@ -13,7 +13,7 @@ from .serializers import AccountSerializer, JournalTransactionSerializer
 class AccountViewSet(OrgScopedMixin, viewsets.ModelViewSet):
     queryset = Account.objects.all()
     serializer_class = AccountSerializer
-    filterset_fields = ["type", "is_active", "is_cash_bank"]
+    filterset_fields = ["type", "is_active", "is_cash_bank", "parent"]
     search_fields = ["code", "name"]
     ordering = ["code"]
     http_method_names = ["get", "post", "patch", "head", "options"]
@@ -24,11 +24,23 @@ class AccountViewSet(OrgScopedMixin, viewsets.ModelViewSet):
         from apps.organizations.access import request_scope
 
         bal = selectors.account_balances(request.organization, request.query_params.get("as_of"), request_scope(request))
+        accounts = list(self.get_queryset().order_by("code"))
+        by_id = {a.id: a for a in accounts}
+        # own debit/credit per account, then each account's subtree total ("rollup") for sub-account hierarchies
+        roll = {a.id: [bal.get(a.id, (0, 0))[0], bal.get(a.id, (0, 0))[1]] for a in accounts}
+        for a in accounts:
+            seen, p = {a.id}, a.parent_id
+            while p is not None and p in by_id and p not in seen:
+                seen.add(p)
+                roll[p][0] += bal.get(a.id, (0, 0))[0]
+                roll[p][1] += bal.get(a.id, (0, 0))[1]
+                p = by_id[p].parent_id
         return Response(
             [
                 {"account": a.id, "code": a.code, "name": a.name, "type": a.type, "is_cash_bank": a.is_cash_bank,
-                 "debit": bal.get(a.id, (0, 0))[0], "credit": bal.get(a.id, (0, 0))[1]}
-                for a in self.get_queryset().order_by("code")
+                 "parent": a.parent_id, "debit": bal.get(a.id, (0, 0))[0], "credit": bal.get(a.id, (0, 0))[1],
+                 "rollup_debit": roll[a.id][0], "rollup_credit": roll[a.id][1]}
+                for a in accounts
             ]
         )
 

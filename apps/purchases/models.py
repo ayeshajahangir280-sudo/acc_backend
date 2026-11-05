@@ -1,10 +1,10 @@
 from django.db import models
 from django.db.models import Q
 
-from apps.core.models import DocumentBase, OrgOwned
+from apps.core.models import ApprovalDocumentBase, OrgOwned
 
 
-class PurchaseInvoice(DocumentBase):
+class PurchaseInvoice(ApprovalDocumentBase):
     class Kind(models.TextChoices):
         INVOICE = "invoice", "Invoice"
         RETURN = "return", "Purchase Return"
@@ -40,4 +40,7 @@ class PurchaseItem(OrgOwned):
     net = models.DecimalField(max_digits=18, decimal_places=2)
     tax = models.DecimalField(max_digits=18, decimal_places=2)
     gross = models.DecimalField(max_digits=18, decimal_places=2)
+    # Optional stock link (only usable once inventory costing is enabled). stock_value = ledger value moved with this line.
+    item = models.ForeignKey("inventory.Item", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    stock_value = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
 

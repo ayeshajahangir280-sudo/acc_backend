@@ -15,6 +15,7 @@ from apps.ledger.models import Account
 from apps.organizations.access import scope_for_membership
 
 from . import services
+from .extras import StatementExtras
 from .models import BankStatement
 from .serializers import BankStatementSerializer, MatchSerializer, StatementLineSerializer
 
@@ -41,7 +42,7 @@ def _int(value, field, default=None, lo=0, hi=366):
     return v
 
 
-class BankStatementViewSet(OrgScopedMixin, viewsets.ReadOnlyModelViewSet):
+class BankStatementViewSet(StatementExtras, OrgScopedMixin, viewsets.ReadOnlyModelViewSet):
     """Bank statements and their reconciliation. Never writes to the ledger.
 
     Bank accounts hold every branch's money, so this module is limited to owners/admins: a branch-restricted user must

@@ -48,6 +48,10 @@ class StockMovement(OrgOwned):
         TRANSFER_OUT = "transfer_out", "Transfer out"
         TRANSFER_IN = "transfer_in", "Transfer in"
         VAN_DELIVERED = "van_delivered", "Delivered from van"
+        SALE = "sale", "Sale"
+        SALES_RETURN = "sales_return", "Sales return"
+        PURCHASE = "purchase", "Purchase"
+        PURCHASE_RETURN = "purchase_return", "Purchase return"
 
     item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="movements")
     location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name="movements")
@@ -100,3 +104,23 @@ class ProductionInput(OrgOwned):
             models.UniqueConstraint(fields=["order", "item"], name="uniq_production_input"),
             models.CheckConstraint(condition=Q(quantity__gt=0), name="production_input_positive"),
         ]
+
+
+class StockValuation(OrgOwned):
+    """Append-only valuation ledger (exists only once inventory costing is enabled).
+
+    One row per org-wide change in an item's quantity and value. Average cost = SUM(value) / SUM(quantity).
+    Transfers between locations do not change org-wide quantity or value, so they have no row.
+    SUM(value) over the organization must equal the INVENTORY account balance (see costing.reconcile).
+    """
+
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="valuations")
+    date = models.DateField()
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)   # signed
+    value = models.DecimalField(max_digits=18, decimal_places=2)      # signed
+    source_type = models.CharField(max_length=30)
+    source_id = models.BigIntegerField(null=True, blank=True)
+    movement = models.ForeignKey(StockMovement, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        indexes = [models.Index(fields=["organization", "item"])]

@@ -12,7 +12,7 @@ from apps.sales.models import SalesInvoice
 from .models import Payment, Receipt
 
 FIELDS = ["id", "number", "date", "party", "party_name", "counter_account", "cash_account", "amount", "method",
-          "reference", "narration", "status", "branch", "allocations", "allocated", "unapplied"]
+          "reference", "narration", "status", "branch", "allocations", "allocated", "unapplied", "tax_rate", "tax_total"]
 
 
 def _allocation_serializer(invoice_model):
@@ -65,7 +65,7 @@ class ReceiptSerializer(_Base):
     class Meta:
         model = Receipt
         fields = FIELDS + ["idempotency_key"]
-        read_only_fields = ["number", "status"]
+        read_only_fields = ["number", "status", "tax_total"]
 
 
 class PaymentSerializer(_Base):
@@ -74,4 +74,4 @@ class PaymentSerializer(_Base):
     class Meta:
         model = Payment
         fields = FIELDS + ["idempotency_key"]
-        read_only_fields = ["number", "status"]
+        read_only_fields = ["number", "status", "tax_total"]

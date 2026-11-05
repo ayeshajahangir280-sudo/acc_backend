@@ -9,8 +9,8 @@ from .models import PurchaseInvoice, PurchaseItem
 class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
-        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross"]
-        read_only_fields = ["net", "tax", "gross"]
+        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross", "item", "stock_value"]
+        read_only_fields = ["net", "tax", "gross", "stock_value"]
 
 
 class PurchaseInvoiceListSerializer(serializers.ModelSerializer):
@@ -19,7 +19,7 @@ class PurchaseInvoiceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseInvoice
         fields = ["id", "number", "kind", "date", "party", "party_name", "original", "due_date", "subtotal", "tax_total", "total",
-                  "status", "narration", "branch"]
+                  "status", "narration", "branch", "rejection_reason", "approved_at"]
 
 
 class PurchaseInvoiceSerializer(PurchaseInvoiceListSerializer):

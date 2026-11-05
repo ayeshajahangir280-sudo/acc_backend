@@ -199,7 +199,8 @@ class LockPermissionTests(PeriodLockBase):
         self.assertEqual((r.status_code, r.data["books_locked_through"]), (200, "2026-01-31"))
         self.assertEqual(self.client.get(self.org_url()).data["books_locked_through"], "2026-01-31")
         self.assertEqual(self.client.patch(self.org_url(), {"books_locked_through": "2026-02-28"}, format="json").status_code, 200)
-        r = self.client.patch(self.org_url(), {"books_locked_through": None}, format="json")
+        self.assertEqual(self.client.patch(self.org_url(), {"books_locked_through": None}, format="json").status_code, 400)  # a reason is required
+        r = self.client.patch(self.org_url(), {"books_locked_through": None, "lock_change_reason": "test"}, format="json")
         self.assertEqual((r.status_code, r.data["books_locked_through"]), (200, None))
 
     def test_admin_can_set_the_lock(self):

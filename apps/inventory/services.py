@@ -44,10 +44,17 @@ def _check_same_org(org, *objs):
             raise DomainError("Item or location does not belong to this organization.", "invalid_reference")
 
 
-def move(org, user, item, location, quantity, mtype, date, ref_type="", ref_id=None, note=""):
+def move(org, user, item, location, quantity, mtype, date, ref_type="", ref_id=None, note="", valued=False):
     """Append one movement. A negative quantity is rejected if it would drive on-hand below zero."""
     quantity = qty(quantity)
     _check_same_org(org, item, location)
+    if not valued and mtype not in (StockMovement.Type.TRANSFER_OUT, StockMovement.Type.TRANSFER_IN):
+        from . import costing
+
+        if costing.costing_on(org):
+            if mtype in costing.UNVALUED_TYPES:
+                raise DomainError("Production and van delivery are not supported while inventory costing is enabled.", "costing_unsupported")
+            raise DomainError("Stock changes must go through the costing engine while inventory costing is enabled.", "costing_required")
     if quantity == 0:
         raise DomainError("Quantity must not be zero.", "invalid_quantity")
     if quantity < 0 and on_hand(org, item, location) + quantity < 0:
@@ -59,11 +66,15 @@ def move(org, user, item, location, quantity, mtype, date, ref_type="", ref_id=N
 
 
 @transaction.atomic
-def adjust_stock(org, user, *, item, location, quantity, date, mtype="adjustment", note=""):
+def adjust_stock(org, user, *, item, location, quantity, date, mtype="adjustment", note="", unit_cost=None):
     if mtype not in (StockMovement.Type.OPENING, StockMovement.Type.ADJUSTMENT):
         raise DomainError("Type must be opening or adjustment.", "invalid_type")
     if not item.is_active or not location.is_active:
         raise DomainError("Item and location must be active.", "inactive")
+    from . import costing
+
+    if costing.costing_on(org):
+        return costing.adjust(org, user, item=item, location=location, quantity=quantity, date=date, mtype=mtype, note=note, unit_cost=unit_cost)
     _lock_items(org, [item.id])
     return move(org, user, item, location, quantity, mtype, date, "inventory.adjustment", None, note)
 

@@ -68,6 +68,7 @@ class AdjustmentSerializer(serializers.Serializer):
     date = serializers.DateField()
     type = serializers.ChoiceField(choices=["opening", "adjustment"], default="adjustment")
     note = serializers.CharField(max_length=300, required=False, allow_blank=True, default="")
+    unit_cost = serializers.DecimalField(max_digits=18, decimal_places=4, required=False, allow_null=True, min_value=0)
 
     def validate(self, a):
         check_org(self.context["organization"], item=a["item"], location=a.get("location"))

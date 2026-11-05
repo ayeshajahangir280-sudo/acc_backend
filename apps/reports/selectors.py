@@ -34,16 +34,60 @@ def _net_by_account(org, date_from=None, date_to=None, branch=None):
     return {r["account_id"]: (r["dr"] or Z, r["cr"] or Z) for r in rows}
 
 
-def trial_balance(org, as_of=None, branch=None):
-    net = _net_by_account(org, None, as_of, branch)
-    rows, tot_dr, tot_cr = [], Z, Z
-    for a in Account.objects.filter(organization=org).order_by("code"):
+def _tree(org, types=None):
+    """Accounts in hierarchy order: [(account, depth)] with each parent immediately followed by its sub-accounts."""
+    qs = Account.objects.filter(organization=org)
+    if types is not None:
+        qs = qs.filter(type__in=types)
+    accounts = list(qs.order_by("code"))
+    ids = {a.id for a in accounts}
+    kids = {}
+    for a in accounts:
+        kids.setdefault(a.parent_id if a.parent_id in ids else None, []).append(a)
+    out = []
+
+    def walk(parent, depth):
+        for a in kids.get(parent, []):
+            out.append((a, depth))
+            walk(a.id, depth + 1)
+
+    walk(None, 0)
+    return out
+
+
+def _rollup(tree, net):
+    """Own debit/credit plus every descendant's, per account. A line is counted once in its own account and once in
+    each ancestor's roll-up; grand totals are always taken from the own figures, so nothing is double counted."""
+    roll = {a.id: list(net.get(a.id, (Z, Z))) for a, _ in tree}
+    parent = {a.id: a.parent_id for a, _ in tree}
+    for a, _ in tree:
         dr, cr = net.get(a.id, (Z, Z))
-        bal = dr - cr
-        if dr == 0 and cr == 0:
+        seen, p = {a.id}, parent[a.id]
+        while p is not None and p in roll and p not in seen:
+            seen.add(p)
+            roll[p][0] += dr
+            roll[p][1] += cr
+            p = parent[p]
+    return roll
+
+
+def trial_balance(org, as_of=None, branch=None):
+    """Rows follow the account hierarchy. `debit`/`credit` are the account's own balance (they sum to the totals);
+    `rollup_debit`/`rollup_credit` include its sub-accounts. A parent with no postings of its own still appears
+    when a sub-account has activity."""
+    net = _net_by_account(org, None, as_of, branch)
+    tree = _tree(org)
+    roll = _rollup(tree, net)
+    rows, tot_dr, tot_cr = [], Z, Z
+    for a, depth in tree:
+        dr, cr = net.get(a.id, (Z, Z))
+        rdr, rcr = roll[a.id]
+        if dr == 0 and cr == 0 and rdr == 0 and rcr == 0:
             continue
-        row = {"account": a.id, "code": a.code, "name": a.name, "type": a.type,
-               "debit": bal if bal > 0 else Z, "credit": -bal if bal < 0 else Z}
+        bal, rbal = dr - cr, rdr - rcr
+        row = {"account": a.id, "code": a.code, "name": a.name, "type": a.type, "parent": a.parent_id, "depth": depth,
+               "debit": bal if bal > 0 else Z, "credit": -bal if bal < 0 else Z,
+               "rollup_debit": rbal if rbal > 0 else Z, "rollup_credit": -rbal if rbal < 0 else Z}
         tot_dr += row["debit"]
         tot_cr += row["credit"]
         rows.append(row)
@@ -51,14 +95,19 @@ def trial_balance(org, as_of=None, branch=None):
 
 
 def _section(org, net, types, sign):
-    """sign=+1: debit-normal (assets, expenses); -1: credit-normal (liabilities, equity, income)."""
+    """sign=+1: debit-normal (assets, expenses); -1: credit-normal (liabilities, equity, income).
+    `amount` is the account's own figure and the section total is the sum of those; `rollup_amount` includes sub-accounts."""
     out, total = [], Z
-    for a in Account.objects.filter(organization=org, type__in=types).order_by("code"):
+    tree = _tree(org, types)
+    roll = _rollup(tree, net)
+    for a, depth in tree:
         dr, cr = net.get(a.id, (Z, Z))
-        amount = (dr - cr) * sign
-        if dr == 0 and cr == 0:
+        rdr, rcr = roll[a.id]
+        if dr == 0 and cr == 0 and rdr == 0 and rcr == 0:
             continue
-        out.append({"account": a.id, "code": a.code, "name": a.name, "amount": amount})
+        amount = (dr - cr) * sign
+        out.append({"account": a.id, "code": a.code, "name": a.name, "parent": a.parent_id, "depth": depth,
+                    "amount": amount, "rollup_amount": (rdr - rcr) * sign})
         total += amount
     return out, total
 
@@ -234,3 +283,64 @@ def vat_summary(org, date_from=None, date_to=None, branch=None):
             "output_tax": {"charged": out_cr, "returned": out_dr, "net": output_tax},
             "input_tax": {"paid": in_dr, "returned": in_cr, "net": input_tax},
             "net_payable": output_tax - input_tax}
+
+
+def vat_return(org, date_from=None, date_to=None, branch=None):
+    """VAT return worksheet: taxable amounts and tax by rate from posted documents, reconciled to the tax ledger.
+
+    Output side: sales invoices less sales returns, plus receipts posted to an account with VAT.
+    Input side: purchase bills less purchase returns, expenses, plus payments posted to an account with VAT.
+    `other_ledger_adjustments` is whatever the tax accounts hold beyond those documents (manual journals,
+    vouchers). It is not a filing layout: the client has not confirmed one.
+    """
+    from collections import defaultdict
+
+    from apps.expenses.models import Expense
+    from apps.purchases.models import PurchaseItem
+    from apps.sales.models import SalesItem
+    from apps.treasury.models import Payment, Receipt
+
+    def window(qs, date_field, branch_field):
+        qs = qs.filter(**{f"{date_field}__gte": date_from}) if date_from else qs
+        qs = qs.filter(**{f"{date_field}__lte": date_to}) if date_to else qs
+        if branch is not None:
+            qs = qs.filter(**{f"{branch_field}__in": [branch] if isinstance(branch, int) else list(branch)})
+        return qs
+
+    def lines(model, kind_sign):
+        out = defaultdict(lambda: [Z, Z])
+        base = model.objects.filter(organization=org, invoice__status="posted")
+        for kind, sign in kind_sign.items():
+            q = window(base.filter(invoice__kind=kind), "invoice__date", "invoice__branch_id")
+            for r in q.values("tax_rate").annotate(n=Sum("net"), t=Sum("tax")):
+                out[r["tax_rate"]][0] += sign * (r["n"] or Z)
+                out[r["tax_rate"]][1] += sign * (r["t"] or Z)
+        return out
+
+    def cash(model, out, sign=1):
+        q = window(model.objects.filter(organization=org, status="posted", tax_total__gt=0), "date", "branch_id")
+        for r in q.values("tax_rate").annotate(g=Sum("amount"), t=Sum("tax_total")):
+            out[r["tax_rate"]][0] += sign * (r["g"] - r["t"])
+            out[r["tax_rate"]][1] += sign * r["t"]
+
+    output = lines(SalesItem, {"invoice": 1, "return": -1})
+    cash(Receipt, output)
+    input_ = lines(PurchaseItem, {"invoice": 1, "return": -1})
+    cash(Payment, input_)
+    q = window(Expense.objects.filter(organization=org, status="posted"), "date", "branch_id")
+    for r in q.values("tax_rate").annotate(n=Sum("subtotal"), t=Sum("tax_total")):
+        input_[r["tax_rate"]][0] += r["n"] or Z
+        input_[r["tax_rate"]][1] += r["t"] or Z
+
+    def rows(d):
+        return [{"rate": rate, "taxable": v[0], "tax": v[1]} for rate, v in sorted(d.items())]
+
+    out_rows, in_rows = rows(output), rows(input_)
+    out_tax, in_tax = sum((r["tax"] for r in out_rows), Z), sum((r["tax"] for r in in_rows), Z)
+    ledger = vat_summary(org, date_from, date_to, branch)
+    return {"date_from": date_from, "date_to": date_to,
+            "output": {"rows": out_rows, "taxable": sum((r["taxable"] for r in out_rows), Z), "tax": out_tax},
+            "input": {"rows": in_rows, "taxable": sum((r["taxable"] for r in in_rows), Z), "tax": in_tax},
+            "net_payable": out_tax - in_tax,
+            "ledger": {"output_tax": ledger["output_tax"]["net"], "input_tax": ledger["input_tax"]["net"]},
+            "other_ledger_adjustments": {"output_tax": ledger["output_tax"]["net"] - out_tax, "input_tax": ledger["input_tax"]["net"] - in_tax}}

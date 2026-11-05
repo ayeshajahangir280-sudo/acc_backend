@@ -40,3 +40,6 @@ class SalesItem(OrgOwned):
     net = models.DecimalField(max_digits=18, decimal_places=2)
     tax = models.DecimalField(max_digits=18, decimal_places=2)
     gross = models.DecimalField(max_digits=18, decimal_places=2)
+    # Optional stock link (only usable once inventory costing is enabled). stock_value = ledger value moved with this line.
+    item = models.ForeignKey("inventory.Item", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    stock_value = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)

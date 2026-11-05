@@ -19,6 +19,13 @@ class Organization(TimeStamped):
     # Period lock: books are closed through this date (inclusive). No document dated on or before it can be
     # posted or voided. NULL = nothing locked. Enforced in apps.ledger.services, not in the UI.
     books_locked_through = models.DateField(null=True, blank=True)
+    # Inventory costing (weighted average): NULL = off. Set once, by apps.inventory.costing.enable_costing; never unset.
+    inventory_costing_since = models.DateField(null=True, blank=True)
+    # Approval workflow (off by default = today's behaviour). When on, an expense / purchase invoice whose total is at or
+    # above approval_min_amount is saved as "pending" and posts only when an owner/admin approves it.
+    expense_approval_required = models.BooleanField(default=False)
+    bill_approval_required = models.BooleanField(default=False)
+    approval_min_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
     def __str__(self):
         return self.name
@@ -86,7 +93,32 @@ class FiscalYearClose(TimeStamped):
     net_profit = models.DecimalField(max_digits=18, decimal_places=2)
     previous_lock = models.DateField(null=True, blank=True)
     closed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+    # Reopening keeps the record (it is part of the audit trail); only a close that has not been reopened counts.
+    reopened_at = models.DateTimeField(null=True, blank=True)
+    reopened_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    reopen_reason = models.CharField(max_length=300, blank=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["organization", "year_end"], name="uniq_fiscal_close_per_year")]
-        ordering = ["-year_end"]
+        constraints = [models.UniqueConstraint(fields=["organization", "year_end"], condition=models.Q(reopened_at__isnull=True),
+                                               name="uniq_active_fiscal_close_per_year")]
+        ordering = ["-year_end", "-id"]
+
+
+class PeriodLockChange(TimeStamped):
+    """Audit trail of every change to Organization.books_locked_through (manual edit, fiscal close, fiscal reopen)."""
+
+    class Source(models.TextChoices):
+        MANUAL = "manual", "Manual change"
+        FISCAL_CLOSE = "fiscal_close", "Fiscal year closed"
+        FISCAL_REOPEN = "fiscal_reopen", "Fiscal year reopened"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name="lock_changes")
+    old_value = models.DateField(null=True, blank=True)
+    new_value = models.DateField(null=True, blank=True)
+    source = models.CharField(max_length=20, choices=Source.choices)
+    reason = models.CharField(max_length=300, blank=True)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [models.Index(fields=["organization", "-id"])]

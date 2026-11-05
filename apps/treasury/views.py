@@ -18,6 +18,8 @@ class _OpenInvoiceSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=18, decimal_places=2)
     allocated = serializers.DecimalField(max_digits=18, decimal_places=2)
     returned = serializers.DecimalField(max_digits=18, decimal_places=2)
+    applied_in = serializers.DecimalField(max_digits=18, decimal_places=2)
+    applied_out = serializers.DecimalField(max_digits=18, decimal_places=2)
     outstanding = serializers.DecimalField(max_digits=18, decimal_places=2)
     branch = serializers.IntegerField(source="branch_id", allow_null=True)
 

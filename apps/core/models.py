@@ -59,3 +59,23 @@ def next_number(organization, key, prefix):
     seq.last_value += 1
     seq.save(update_fields=["last_value"])
     return f"{prefix}-{seq.last_value:06d}"
+
+
+class ApprovalStatus(models.TextChoices):
+    POSTED = "posted", "Posted"
+    VOID = "void", "Void"
+    PENDING = "pending", "Pending approval"
+    REJECTED = "rejected", "Rejected"
+
+
+class ApprovalDocumentBase(DocumentBase):
+    """A document that may wait for approval before it posts. While pending/rejected it has no journal, no stock movement
+    and is invisible to every ledger-based report; only `posted` documents are payable or reportable."""
+
+    status = models.CharField(max_length=10, choices=ApprovalStatus.choices, default=ApprovalStatus.POSTED)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        abstract = True

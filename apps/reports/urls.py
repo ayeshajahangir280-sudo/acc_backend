@@ -10,4 +10,5 @@ urlpatterns = [
     path("reports/vendor/", views.VendorReportView.as_view()),
     path("reports/sales-summary/", views.SalesSummaryView.as_view()),
     path("reports/vat-summary/", views.VatSummaryView.as_view()),
+    path("reports/vat-return/", views.VatReturnView.as_view()),
 ]

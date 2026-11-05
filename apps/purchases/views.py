@@ -2,16 +2,20 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.core.views import OrgCreateReadViewSet
+from apps.documents.views import DocumentPdfMixin
+from apps.treasury.credit_views import CreditActionsMixin
 
 from . import services
 from .models import PurchaseInvoice
 from .serializers import PurchaseInvoiceListSerializer, PurchaseInvoiceSerializer
 
 
-class PurchaseInvoiceViewSet(OrgCreateReadViewSet):
+class PurchaseInvoiceViewSet(DocumentPdfMixin, CreditActionsMixin, OrgCreateReadViewSet):
     """Purchase register (list/filter) + create + void. Posted documents are never edited or deleted."""
 
     branch_scoped = True
+    doc_side = "purchases"
+    credit_direction = "payment"
     queryset = PurchaseInvoice.objects.select_related("party").order_by("-date", "-id")
     filterset_fields = {"date": ["gte", "lte"], "party": ["exact"], "kind": ["exact"], "status": ["exact"]}
     search_fields = ["number", "party__name", "narration"]
@@ -34,6 +38,16 @@ class PurchaseInvoiceViewSet(OrgCreateReadViewSet):
             original=d.get("original"), due_date=d.get("due_date"), idempotency_key=d.get("idempotency_key"),
         )
         return Response(PurchaseInvoiceSerializer(doc, context=self.get_serializer_context()).data, status=201 if created else 200)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        doc = services.approve_document(self.get_object(), request.user, request.membership)
+        return Response(PurchaseInvoiceListSerializer(doc).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        doc = services.reject_document(self.get_object(), request.user, request.membership, request.data.get("reason"))
+        return Response(PurchaseInvoiceListSerializer(doc).data)
 
     @action(detail=True, methods=["post"])
     def void(self, request, pk=None):

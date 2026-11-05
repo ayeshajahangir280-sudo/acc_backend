@@ -1,12 +1,13 @@
 from rest_framework import viewsets
 
+from apps.documents.views import StatementMixin
 from apps.core.views import OrgScopedMixin
 
 from .models import Party
 from .serializers import PartySerializer
 
 
-class PartyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
+class PartyViewSet(StatementMixin, OrgScopedMixin, viewsets.ModelViewSet):
     """Parties with history cannot be hard-deleted (ledger rows protect them); deactivate instead."""
 
     queryset = Party.objects.all()
