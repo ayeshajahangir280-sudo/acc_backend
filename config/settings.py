@@ -121,6 +121,17 @@ MEDIA_URL = "media/"  # files are served only through authenticated API endpoint
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Media storage: Cloudinary when CLOUDINARY_URL is set (the SDK reads it from the env), else local MEDIA_ROOT.
+CLOUDINARY_FOLDER = os.environ.get("CLOUDINARY_FOLDER", "acc")
+STORAGES = {
+    "default": {
+        "BACKEND": "apps.core.storage.CloudinaryStorage"
+        if os.environ.get("CLOUDINARY_URL")
+        else "django.core.files.storage.FileSystemStorage"
+    },
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.TokenAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
