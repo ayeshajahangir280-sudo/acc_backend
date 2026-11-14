@@ -19,6 +19,8 @@ class Account(OrgOwned):
     type = models.CharField(max_length=10, choices=AccountType.choices)
     # Stable identifier the posting services use to find well-known accounts (e.g. "ACCOUNTS_RECEIVABLE").
     system_code = models.CharField(max_length=40, null=True, blank=True)
+    # Free-form classification within the type (e.g. "Current asset", "Operating expense"); purely descriptive.
+    subtype = models.CharField(max_length=60, blank=True, default="")
     is_cash_bank = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     # Sub-account support: a child rolls up into its parent in balances. Same type as the parent; see ledger.hierarchy.
