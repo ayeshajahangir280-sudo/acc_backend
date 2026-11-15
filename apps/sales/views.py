@@ -25,9 +25,49 @@ class SalesInvoiceViewSet(DocumentPdfMixin, CreditActionsMixin, OrgCreateReadVie
     def get_serializer_class(self):
         return SalesInvoiceListSerializer if self.action == "list" else SalesInvoiceSerializer
 
+    PAYMENT_STATUSES = ("paid", "settled", "pending", "overdue", "open")
+
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.prefetch_related("items") if self.action != "list" else qs
+        if self.action != "list":
+            return qs.prefetch_related("items")
+        return self._filter_payment_status(qs)
+
+    def _filter_payment_status(self, qs):
+        """Optional read-only `?payment_status=paid|settled|pending|overdue|open` list filter.
+
+        Derived from the same outstanding balance the receipts screen uses (allocations, returns, credits, refunds);
+        nothing is stored or changed. Only posted invoices qualify, so a voided invoice is never "paid".
+          - paid:    nothing outstanding and money or customer credit was actually applied to it
+          - settled: nothing outstanding but no payment or credit applied, i.e. closed by sales returns
+          - pending / overdue: still has a balance (including partially paid), split by due date (or invoice date)
+        """
+        status = self.request.query_params.get("payment_status")
+        if not status:
+            return qs
+        if status not in self.PAYMENT_STATUSES:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"payment_status": "Use paid, settled, pending, overdue or open."})
+        from django.db.models import Q
+        from django.db.models.functions import Coalesce
+        from django.utils import timezone
+
+        from apps.treasury.selectors import outstanding_invoices
+
+        inv = outstanding_invoices(self.request.organization, "receipt")
+        received = Q(allocated__gt=0) | Q(applied_in__gt=0)
+        if status == "paid":
+            ids = inv.filter(Q(outstanding__lte=0) & received)
+        elif status == "settled":
+            ids = inv.filter(Q(outstanding__lte=0) & ~received)
+        else:
+            ids = inv.filter(outstanding__gt=0)
+            if status != "open":
+                ids = ids.annotate(eff_due=Coalesce("due_date", "date"))
+                today = timezone.localdate()
+                ids = ids.filter(eff_due__gte=today) if status == "pending" else ids.filter(eff_due__lt=today)
+        return qs.filter(pk__in=ids.values("pk"))
 
     def create(self, request, *args, **kwargs):
         ser = self.get_serializer(data=request.data)
