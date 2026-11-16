@@ -2,7 +2,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from apps.core.permissions import ADMIN_ROLES
+from apps.core import perms
 from apps.core.views import OrgCreateReadViewSet
 
 from . import services
@@ -30,7 +30,7 @@ class VoucherViewSet(OrgCreateReadViewSet):
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
-        if d["type"] == "opening" and request.membership.role not in ADMIN_ROLES:
+        if d["type"] == "opening" and not perms.has(request.membership, "ledger", perms.MANAGE):
             raise PermissionDenied("Only owners/admins can enter opening balances.")
         v, created = services.create_voucher(
             request.organization, request.user, d["type"], date=d["date"], lines=d["lines"],

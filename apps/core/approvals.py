@@ -6,7 +6,7 @@ created themselves (the owner may, otherwise a one-person organisation could nev
 document's own date, so the period lock, branch rules and costing run at approval time, not before."""
 from django.utils import timezone
 
-from apps.core.errors import DomainError
+from apps.core.errors import DomainError, Forbidden
 from apps.core.models import ApprovalStatus
 
 APPROVER_ROLES = {"owner", "admin"}
@@ -18,8 +18,11 @@ def needs_approval(org, kind, total):
 
 
 def check_can_decide(membership, doc):
-    if membership is None or membership.role not in APPROVER_ROLES:
-        raise DomainError("Only owners and admins can approve or reject.", "approval_forbidden")
+    from . import perms
+
+    module = "expenses" if type(doc).__name__ == "Expense" else "purchase_invoices"
+    if membership is None or not perms.has(membership, module, perms.POST):
+        raise Forbidden("You do not have permission to approve or reject these documents.", "approval_forbidden")
     if doc.status != ApprovalStatus.PENDING:
         raise DomainError("This document is not waiting for approval.", "not_pending")
 

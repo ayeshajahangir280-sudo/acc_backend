@@ -49,6 +49,19 @@ class DocumentPdfMixin:
 
     doc_side = None
 
+    @staticmethod
+    def _items(inv, sales):
+        fields = ("description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross")
+        if not sales:
+            return list(inv.items.all().order_by("id").values(*fields))
+        # Sales descriptions are optional: a blank line prints its income account's name instead.
+        rows = list(inv.items.all().order_by("id").values(*fields, "income_account__name"))
+        for r in rows:
+            name = r.pop("income_account__name")
+            if not r["description"]:
+                r["description"] = name or "Sales"
+        return rows
+
     def _doc_data(self, inv):
         sales = self.doc_side == "sales"
         is_return = inv.kind == "return"
@@ -58,7 +71,7 @@ class DocumentPdfMixin:
             meta.append(("Due date", inv.due_date))
         d = {**_org(self.request.organization), "title": title, "number": inv.number, "meta": meta,
              "party_label": "Bill to" if sales else "Supplier", "party": _party(inv.party),
-             "items": list(inv.items.all().order_by("id").values("description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross")),
+             "items": self._items(inv, sales),
              "subtotal": inv.subtotal, "tax_total": inv.tax_total, "total": inv.total, "narration": inv.narration,
              "void": inv.status == "void", "balance_due": None, "reference": None}
         if is_return and inv.original_id:

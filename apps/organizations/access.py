@@ -30,7 +30,7 @@ def scope_for_user(org, user):
     """Scope for service-layer checks, where only (org, user) are known."""
     if user is None or getattr(user, "is_superuser", False):
         return None  # internal calls and platform operators
-    membership = Membership.objects.filter(user=user, organization=org).first()
+    membership = Membership.objects.filter(user=user, organization=org, is_active=True).first()
     return NONE_SCOPE if membership is None else scope_for_membership(membership)
 
 

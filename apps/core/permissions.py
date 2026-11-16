@@ -25,17 +25,25 @@ class IsOrgMember(BasePermission):
 
         membership = (
             Membership.objects.select_related("organization")
-            .filter(user=user, organization_id=int(raw), organization__is_active=True)
+            .filter(user=user, organization_id=int(raw), organization__is_active=True, is_active=True)
             .first()
         )
         if membership is None:
             return False
         request.organization = membership.organization
         request.membership = membership
-        if request.method in SAFE_METHODS:
+        from . import perms
+
+        try:
+            need = perms.resolve(request, view)
+        except perms.Unmapped:
+            # Fail closed: an endpoint that is not in the permission table cannot be used.
+            self.message = "This action is not permitted."
+            return False
+        if need is None or perms.has(membership, *need):
             return True
-        required = getattr(view, "write_roles", WRITE_ROLES)
-        if membership.role in required:
-            return True
-        self.message = "Your role does not permit this action."
+        module, action = need
+        labels = dict((m[0], m[1]) for m in perms.MODULES)
+        label = " or ".join(labels.get(m, m) for m in module) if isinstance(module, tuple) else labels.get(module, module)
+        self.message = f"You do not have permission to {action} in {label}."
         return False

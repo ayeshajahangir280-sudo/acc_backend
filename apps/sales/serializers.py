@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.ledger.models import Account
 from apps.organizations.models import Branch
 from apps.parties.models import Party
 
@@ -7,10 +8,22 @@ from .models import SalesInvoice, SalesItem
 
 
 class SalesItemSerializer(serializers.ModelSerializer):
+    description = serializers.CharField(max_length=300, required=False, allow_blank=True, default="")
+    # Ownership/eligibility is checked in the service (apps.ledger.income), which also applies the default when omitted.
+    income_account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.all(), required=False, allow_null=True)
+    income_account_name = serializers.SerializerMethodField()
+
     class Meta:
         model = SalesItem
-        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross", "item", "stock_value"]
+        fields = ["id", "description", "quantity", "unit_price", "tax_rate", "net", "tax", "gross", "item", "stock_value",
+                  "income_account", "income_account_name"]
         read_only_fields = ["net", "tax", "gross", "stock_value"]
+
+    def get_income_account_name(self, obj):
+        # Lines posted before per-line accounts have no account stored: they were credited to Sales Revenue.
+        if isinstance(obj, dict):
+            return None
+        return obj.income_account.name if obj.income_account_id else None
 
 
 class SalesInvoiceListSerializer(serializers.ModelSerializer):

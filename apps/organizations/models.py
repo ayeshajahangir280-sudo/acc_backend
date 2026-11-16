@@ -26,6 +26,8 @@ class Organization(TimeStamped):
     expense_approval_required = models.BooleanField(default=False)
     bill_approval_required = models.BooleanField(default=False)
     approval_min_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # Income account preselected on new sales invoice lines (and used when a line names none). NULL = built-in Sales Revenue.
+    default_income_account = models.ForeignKey("ledger.Account", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     def __str__(self):
         return self.name
@@ -54,6 +56,11 @@ class Membership(TimeStamped):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="memberships")
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=12, choices=Role.choices, default=Role.ACCOUNTANT)
+    # Deactivated members keep their row (and history) but lose all access to this organization immediately.
+    is_active = models.BooleanField(default=True)
+    # Custom permissions {module: [actions]} (see apps.core.perms). NULL = the role's preset. Ignored for owners.
+    permissions = models.JSONField(null=True, blank=True)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["user", "organization"], name="uniq_membership")]
@@ -122,3 +129,33 @@ class PeriodLockChange(TimeStamped):
     class Meta:
         ordering = ["-id"]
         indexes = [models.Index(fields=["organization", "-id"])]
+
+
+class Invitation(TimeStamped):
+    """Invitation for someone without an account (existing users are added directly). Only a hash of the token is
+    stored; the raw token is shown once (link) and emailed when mail is configured."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="invitations")
+    email = models.EmailField()
+    role = models.CharField(max_length=12, choices=Membership.Role.choices, default=Membership.Role.ACCOUNTANT)
+    permissions = models.JSONField(null=True, blank=True)  # custom permissions to apply on acceptance (NULL = role preset)
+    token_hash = models.CharField(max_length=64, unique=True)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [models.Index(fields=["organization", "email"])]
+
+    @property
+    def status(self):
+        from django.utils import timezone
+
+        if self.accepted_at:
+            return "accepted"
+        if self.cancelled_at:
+            return "cancelled"
+        return "expired" if self.expires_at <= timezone.now() else "pending"

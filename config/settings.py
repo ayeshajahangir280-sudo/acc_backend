@@ -172,3 +172,5 @@ EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
 EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "false").lower() == "true"
 EMAIL_TIMEOUT = 15
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "")
+# Public address of the web app, used in invitation links/emails (falls back to the request's CORS-allowed Origin).
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "")

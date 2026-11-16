@@ -33,7 +33,7 @@ class SalesInvoice(DocumentBase):
 
 class SalesItem(OrgOwned):
     invoice = models.ForeignKey(SalesInvoice, on_delete=models.CASCADE, related_name="items")
-    description = models.CharField(max_length=300)
+    description = models.CharField(max_length=300, blank=True)  # optional on sales lines
     quantity = models.DecimalField(max_digits=18, decimal_places=4)
     unit_price = models.DecimalField(max_digits=18, decimal_places=4)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # percent, user-supplied
@@ -43,3 +43,6 @@ class SalesItem(OrgOwned):
     # Optional stock link (only usable once inventory costing is enabled). stock_value = ledger value moved with this line.
     item = models.ForeignKey("inventory.Item", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
     stock_value = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
+    # Income account this line's net amount was credited to. NULL on lines posted before per-line accounts existed:
+    # those were credited to the built-in Sales Revenue account (system_code SALES), and their journals are never rewritten.
+    income_account = models.ForeignKey("ledger.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+")

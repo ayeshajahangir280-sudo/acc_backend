@@ -21,7 +21,7 @@ def _prepare_items(items):
         if qty <= 0 or price < 0 or not (0 <= rate <= 100):
             raise DomainError("Invalid item quantity, price or tax rate.", "invalid_item")
         net, t, gross = line_amounts(qty, price, rate)
-        rows.append(dict(description=it["description"], quantity=qty, unit_price=price, tax_rate=rate, net=net, tax=t, gross=gross,
+        rows.append(dict(description=it.get("description") or "", quantity=qty, unit_price=price, tax_rate=rate, net=net, tax=t, gross=gross,
                          item=it.get("item")))
         sub += net
         tax += t
@@ -45,11 +45,29 @@ def create_document(org, user, *, kind, party, date, items, branch=None, narrati
     if due_date is not None and due_date < date:
         raise DomainError("Due date cannot be before the invoice date.", "invalid_due_date")
     billed = _billable_lines(org, party, kind, billable_expenses)
-    rows, subtotal, tax_total = _prepare_items(list(items) + [line for _, line in billed])
+    all_items = list(items) + [line for _, line in billed]
+    rows, subtotal, tax_total = _prepare_items(all_items)
+    for r, it in zip(rows, all_items):  # sales-only field; _prepare_items is shared with quotes/orders
+        r["income_account"] = it.get("income_account")
     total = subtotal + tax_total
     from apps.inventory import costing
 
     tracked = costing.validate_rows(org, rows)
+
+    # Income account per line. Invoices: the chosen account, else the organization default (Sales Revenue unless configured).
+    # Returns keep their existing treatment (debit Sales Returns), so a return line may not name an income account.
+    from apps.ledger import income
+
+    if kind == SalesInvoice.Kind.INVOICE:
+        default_acc = None
+        for r in rows:
+            if r["income_account"] is None:
+                default_acc = default_acc or income.default_income_account(org)
+                r["income_account"] = default_acc
+            else:
+                income.check_eligible(org, r["income_account"])
+    elif any(r["income_account"] is not None for r in rows):
+        raise DomainError("Sales returns post to the Sales Returns account; remove the income account from return lines.", "invalid_income_account")
 
     if kind == SalesInvoice.Kind.RETURN:
         if original is None:
@@ -81,7 +99,11 @@ def create_document(org, user, *, kind, party, date, items, branch=None, narrati
     ar, rev, ret, tax_acc = (system_account(org, c) for c in ("ACCOUNTS_RECEIVABLE", "SALES", "SALES_RETURNS", "TAX_OUTPUT"))
     z = Decimal("0")
     if kind == SalesInvoice.Kind.INVOICE:
-        lines = [Line(ar, debit=total, party=party), Line(rev, credit=subtotal)]
+        # One credit per income account, in line order; together they equal the subtotal exactly as the single credit did.
+        by_acc = {}
+        for r in rows:
+            by_acc.setdefault(r["income_account"].pk, [r["income_account"], z])[1] += r["net"]
+        lines = [Line(ar, debit=total, party=party)] + [Line(acc, credit=amt) for acc, amt in by_acc.values() if amt]
         if tax_total:
             lines.append(Line(tax_acc, credit=tax_total))
     else:
