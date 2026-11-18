@@ -7,6 +7,12 @@ Enforcement is central: core.permissions.IsOrgMember asks `resolve(request, view
 needs and checks it against the caller's effective permissions. Writes to views/actions that are not mapped here are
 refused (fail closed); tests walk every registered route to make sure each one is mapped.
 
+Actions are independent: granting one never implies another. In particular "edit" (change existing records) does not
+include delete, void, post, approve, export or manage; each must be granted explicitly. The only coupling is in the UI,
+which ticks "view" when another action of the same module is ticked (an action on records you cannot see is useless).
+"update" is accepted as a synonym of "edit". "approve" (approve / reject documents waiting for approval) used to be
+stored as "post" for purchase invoices and expenses; that legacy spelling is still read (see LEGACY_ALIASES).
+
 Presets reproduce the behaviour that existed before custom permissions, endpoint by endpoint:
 - owner, admin: everything (owner always, whatever is stored).
 - accountant: everything except: approving bills/expenses, banking, period lock / fiscal close / branches /
@@ -15,8 +21,9 @@ Presets reproduce the behaviour that existed before custom permissions, endpoint
 - viewer: read everything except banking (including viewing PDFs), export reports; no changes and no emailing.
 Banking additionally requires an unrestricted role (owner/admin): bank accounts hold every branch's money.
 """
-VIEW, CREATE, EDIT, DELETE, POST, VOID, EXPORT, MANAGE = "view", "create", "edit", "delete", "post", "void", "export", "manage"
-ACTIONS = [VIEW, CREATE, EDIT, DELETE, POST, VOID, EXPORT, MANAGE]
+VIEW, CREATE, EDIT, DELETE, POST, APPROVE, VOID, EXPORT, MANAGE = (
+    "view", "create", "edit", "delete", "post", "approve", "void", "export", "manage")
+ACTIONS = [VIEW, CREATE, EDIT, DELETE, POST, APPROVE, VOID, EXPORT, MANAGE]
 
 # (key, label, group, actions that mean something for this module)
 MODULES = [
@@ -28,11 +35,11 @@ MODULES = [
     ("receipts", "Receipts (money in)", "Sales", [VIEW, CREATE, EDIT, VOID, EXPORT]),
     ("customer_credits", "Customer credits", "Sales", [VIEW, CREATE, EDIT, VOID]),
     ("purchase_orders", "Purchase orders", "Purchases", [VIEW, CREATE, EDIT, POST, EXPORT]),
-    ("purchase_invoices", "Purchase invoices", "Purchases", [VIEW, CREATE, VOID, POST, EXPORT]),
+    ("purchase_invoices", "Purchase invoices", "Purchases", [VIEW, CREATE, APPROVE, VOID, EXPORT]),
     ("purchase_returns", "Purchase returns", "Purchases", [VIEW, CREATE, VOID, EXPORT]),
     ("payments", "Payments (money out)", "Purchases", [VIEW, CREATE, EDIT, VOID, EXPORT]),
     ("supplier_credits", "Supplier credits", "Purchases", [VIEW, CREATE, EDIT, VOID]),
-    ("expenses", "Expenses", "Purchases", [VIEW, CREATE, EDIT, VOID, POST, EXPORT]),
+    ("expenses", "Expenses", "Purchases", [VIEW, CREATE, EDIT, APPROVE, VOID, EXPORT]),
     ("banking", "Banking", "Finance", [VIEW, CREATE, EDIT, DELETE, EXPORT]),
     ("inventory", "Inventory & van loading", "Finance", [VIEW, CREATE, EDIT, VOID, MANAGE]),
     ("ledger", "Ledger & vouchers", "Finance", [VIEW, CREATE, VOID, MANAGE]),
@@ -52,8 +59,8 @@ def _all():
 
 def _accountant():
     p = _all()
-    p["purchase_invoices"].discard(POST)  # approving bills
-    p["expenses"].discard(POST)  # approving expenses
+    p["purchase_invoices"].discard(APPROVE)  # approving bills
+    p["expenses"].discard(APPROVE)  # approving expenses
     p["banking"] = set()  # bank data spans every branch: branch-restricted roles never see it (see BankStatementViewSet)
     p["inventory"].discard(MANAGE)
     p["ledger"].discard(MANAGE)
@@ -72,8 +79,22 @@ def _viewer():
 PRESETS = {"owner": _all(), "admin": _all(), "accountant": _accountant(), "viewer": _viewer()}
 
 
+# Spellings accepted on input and in stored data. "post" -> "approve" applies only to modules where approving is the
+# meaning of the old "post" (they support "approve" but not "post"); elsewhere "post" keeps its own meaning.
+LEGACY_ALIASES = {"update": EDIT}
+
+
+def _canonical(mod, action):
+    action = LEGACY_ALIASES.get(action, action)
+    if action == POST and POST not in MODULE_ACTIONS[mod] and APPROVE in MODULE_ACTIONS[mod]:
+        return APPROVE
+    return action
+
+
 def normalize(raw):
-    """Clean a {module: [actions]} payload: unknown modules/actions dropped, actions limited to what the module supports."""
+    """Clean a {module: [actions]} payload: unknown modules/actions dropped, actions limited to what the module supports.
+
+    Nothing is ever added: an action is granted only if it is listed (after legacy aliases)."""
     out = {}
     if not isinstance(raw, dict):
         raise ValueError("Permissions must be an object of module: [actions].")
@@ -82,7 +103,7 @@ def normalize(raw):
             continue
         if not isinstance(acts, (list, tuple, set)):
             raise ValueError(f"Permissions for {mod} must be a list of actions.")
-        out[mod] = {a for a in acts if a in MODULE_ACTIONS[mod]}
+        out[mod] = {c for c in (_canonical(mod, a) for a in acts if isinstance(a, str)) if c in MODULE_ACTIONS[mod]}
     return {m: out.get(m, set()) for m in MODULE_KEYS}
 
 
@@ -114,6 +135,16 @@ def has(membership, module, action):
 
 def as_lists(perms):
     return {m: sorted(perms.get(m, set()), key=ACTIONS.index) for m in MODULE_KEYS}
+
+
+def flat(perms):
+    """{module: actions} -> set of "module.action" strings (for diffs and audit records)."""
+    return {f"{m}.{a}" for m, acts in perms.items() for a in acts}
+
+
+def exceeds(perms, limit):
+    """Sorted "module.action" strings present in `perms` but not in `limit`."""
+    return sorted(flat(perms) - flat(limit), key=lambda s: (MODULE_KEYS.index(s.split(".")[0]), ACTIONS.index(s.split(".")[1])))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -160,7 +191,7 @@ CREDITS = {"credit_list": VIEW, "credit": VIEW, "apply_credit": CREATE, "unapply
 #                     reference_gets, {drf action: module override})
 ROUTES = {
     "SalesInvoiceViewSet": (_sales_doc, {**DOC}, False, {k: "customer_credits" for k in CREDITS}),
-    # approve / reject: gated at "create" here; the approval service then requires "post" and answers 403
+    # approve / reject: gated at "create" here; the approval service then requires "approve" and answers 403
     # approval_forbidden (the long-standing error code clients rely on).
     "PurchaseInvoiceViewSet": (_purchase_doc, {**DOC, "approve": CREATE, "reject": CREATE}, False, {k: "supplier_credits" for k in CREDITS}),
     "SalesOrderViewSet": (_sales_order, {"accept": EDIT, "decline": EDIT, "cancel": EDIT, "convert": POST}, False, {}),
@@ -193,7 +224,7 @@ ROUTES = {
     "TaxRateViewSet": ("settings", {}, True, {}),
     "BranchViewSet": ("settings", {"create": MANAGE, "update": MANAGE, "partial_update": MANAGE}, True, {}),
     "BranchAccessViewSet": ("settings", {"create": MANAGE, "destroy": MANAGE}, True, {}),
-    "MembershipViewSet": ("users", {"partial_update": MANAGE, "update": MANAGE, "destroy": MANAGE}, False, {}),
+    "MembershipViewSet": ("users", {"partial_update": MANAGE, "update": MANAGE, "destroy": MANAGE, "audit": MANAGE}, False, {}),
     "InvitationViewSet": ("users", {"list": MANAGE, "retrieve": MANAGE, "create": MANAGE, "resend": MANAGE, "cancel": MANAGE}, False, {}),
     # APIViews (no DRF action): reports
     "TrialBalanceView": ("reports", {}, False, {}), "ProfitLossView": ("reports", {}, False, {}),

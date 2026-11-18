@@ -5,7 +5,10 @@ The rules live here (not in views) so no endpoint can bypass them:
 - Nobody changes or removes their own membership (no self-promotion, no accidental self-lock-out).
 - Only an owner can create, change or remove an owner.
 - An organization always keeps at least one active owner.
+- No privilege escalation: a non-owner can grant only permissions they hold themselves, and can change or remove only
+  members whose access does not exceed their own.
 - Users, organizations and accounting records are never deleted; removal deletes only the membership row.
+- Every change is written to the access audit trail (AccessChange): who, when, and what changed.
 """
 import hashlib
 import secrets
@@ -18,7 +21,7 @@ from django.utils import timezone
 
 from apps.core.errors import DomainError, Forbidden
 
-from .models import Invitation, Membership, Organization
+from .models import AccessChange, Invitation, Membership, Organization
 
 INVITE_DAYS = 7
 OWNER = Membership.Role.OWNER
@@ -50,6 +53,64 @@ def _check_actor(actor, role=None, target=None):
         raise Forbidden("You cannot change or remove your own membership. Ask another owner.", "self_change")
     if actor.role != OWNER and (role == OWNER or (target is not None and target.role == OWNER)):
         raise Forbidden("Only an owner can add, change or remove an owner.", "owner_only")
+
+
+def _check_authority(actor, target):
+    """A non-owner may only change or remove a member whose access (as if active) does not exceed their own: otherwise a
+    member with user management but fewer rights could strip, deactivate or reshape someone who outranks them."""
+    from apps.core import perms
+
+    if actor.role == OWNER:
+        return
+    probe = Membership(role=target.role, is_active=True, permissions=target.permissions)
+    extra = perms.exceeds(perms.effective(probe), perms.effective(actor))
+    if extra:
+        raise Forbidden("You cannot change a member who has permissions you do not have yourself: " + ", ".join(extra[:6])
+                        + ("…" if len(extra) > 6 else ""), "outranks_actor")
+
+
+def _snapshot(m):
+    """What an audit diff compares: role, active flag, whether custom, and effective permissions (as if active)."""
+    from apps.core import perms
+
+    probe = Membership(role=m.role, is_active=True, permissions=m.permissions)
+    return {"role": m.role, "is_active": m.is_active, "custom": m.role != OWNER and m.permissions is not None,
+            "perms": perms.flat(perms.effective(probe))}
+
+
+def _sorted_perms(items):
+    from apps.core import perms
+
+    def key(s):
+        mod, act = s.split(".", 1)
+        return (perms.MODULE_KEYS.index(mod) if mod in perms.MODULE_KEYS else 99, perms.ACTIONS.index(act) if act in perms.ACTIONS else 99)
+
+    return sorted(items, key=key)
+
+
+def _record(org, actor_user, event, *, target_user=None, target_name="", membership_id=None, details=None):
+    AccessChange.objects.create(
+        organization_id=org.pk if hasattr(org, "pk") else org, event=event, actor=actor_user,
+        actor_name=actor_user.get_username() if actor_user is not None else "", target_user=target_user,
+        target_name=target_name or (target_user.get_username() if target_user is not None else ""),
+        membership_id=membership_id, details=details or {})
+
+
+def _record_diff(org, actor_user, target, before, after):
+    """One audit row per kind of change (role or permissions, status), each carrying the effective-permission diff."""
+    granted = _sorted_perms(after["perms"] - before["perms"])
+    revoked = _sorted_perms(before["perms"] - after["perms"])
+    common = {"target_user": target.user, "membership_id": target.pk}
+    perm_diff = {k: v for k, v in (("granted", granted), ("revoked", revoked)) if v}
+    if before["role"] != after["role"]:
+        _record(org, actor_user, AccessChange.Event.ROLE_CHANGED,
+                details={"role": [before["role"], after["role"]], "custom": [before["custom"], after["custom"]], **perm_diff}, **common)
+    elif perm_diff or before["custom"] != after["custom"]:
+        _record(org, actor_user, AccessChange.Event.PERMISSIONS_CHANGED,
+                details={"custom": [before["custom"], after["custom"]], **perm_diff}, **common)
+    if before["is_active"] != after["is_active"]:
+        event = AccessChange.Event.ACTIVATED if after["is_active"] else AccessChange.Event.DEACTIVATED
+        _record(org, actor_user, event, details={"is_active": [before["is_active"], after["is_active"]]}, **common)
 
 
 def _check_grant(actor, role, permissions):
@@ -110,6 +171,9 @@ def invite(org, actor, *, email, role, permissions=None):
                               "already_member")
         m = Membership.objects.create(organization=org, user=user, role=role, permissions=permissions if role != OWNER else None,
                                       invited_by=actor.user)
+        snap = _snapshot(m)
+        _record(org, actor.user, AccessChange.Event.MEMBER_ADDED, target_user=user, membership_id=m.pk,
+                details={"role": [None, role], "custom": [False, snap["custom"]], "granted": _sorted_perms(snap["perms"])})
         return "member", m, None
     if Invitation.objects.filter(organization=org, email__iexact=email, accepted_at__isnull=True, cancelled_at__isnull=True,
                                  expires_at__gt=timezone.now()).exists():
@@ -118,6 +182,8 @@ def invite(org, actor, *, email, role, permissions=None):
     inv = Invitation.objects.create(organization=org, email=email, role=role, permissions=permissions if role != OWNER else None,
                                     token_hash=hash_token(raw), invited_by=actor.user,
                                     expires_at=timezone.now() + timedelta(days=INVITE_DAYS))
+    _record(org, actor.user, AccessChange.Event.INVITED, target_name=email,
+            details={"role": [None, role], "custom": [False, role != OWNER and inv.permissions is not None]})
     return "invitation", inv, raw
 
 
@@ -145,6 +211,8 @@ def cancel(inv, actor):
     if not inv.cancelled_at:
         inv.cancelled_at = timezone.now()
         inv.save(update_fields=["cancelled_at", "updated_at"])
+        _record(inv.organization_id, actor.user, AccessChange.Event.INVITATION_CANCELLED, target_name=inv.email,
+                details={"role": [inv.role, None]})
     return inv
 
 
@@ -158,6 +226,8 @@ def update_member(org, actor, target, *, role=None, is_active=None, permissions=
     target = Membership.objects.select_for_update().get(pk=target.pk, organization=org)
     new_role = _valid_role(role) if role is not None else target.role
     _check_actor(actor, role=new_role if role is not None else None, target=target)
+    _check_authority(actor, target)
+    before = _snapshot(target)
     new_perms = target.permissions if permissions is UNSET else _clean_permissions(permissions)
     if new_role == OWNER:
         new_perms = None  # owners always have everything
@@ -178,6 +248,7 @@ def update_member(org, actor, target, *, role=None, is_active=None, permissions=
         fields.append("is_active")
     if fields:
         target.save(update_fields=fields + ["updated_at"])
+        _record_diff(org, actor.user, target, before, _snapshot(target))
     return target
 
 
@@ -186,8 +257,12 @@ def remove_member(org, actor, target):
     _lock(org)
     target = Membership.objects.select_for_update().get(pk=target.pk, organization=org)
     _check_actor(actor, target=target)
+    _check_authority(actor, target)
     if target.role == OWNER and target.is_active and _active_owner_count(org) <= 1:
         raise DomainError("An organization must keep at least one active owner.", "last_owner")
+    snap = _snapshot(target)
+    _record(org, actor.user, AccessChange.Event.REMOVED, target_user=target.user, membership_id=target.pk,
+            details={"role": [target.role, None], "revoked": _sorted_perms(snap["perms"]) if target.is_active else []})
     target.delete()  # membership only; the user and every record they created stay
 
 
@@ -235,6 +310,10 @@ def accept(raw, *, username="", password="", email_login_user=None):
     inv.accepted_at = timezone.now()
     inv.accepted_by = user
     inv.save(update_fields=["accepted_at", "accepted_by", "updated_at"])
+    if created:
+        snap = _snapshot(m)
+        _record(inv.organization_id, user, AccessChange.Event.INVITATION_ACCEPTED, target_user=user, membership_id=m.pk,
+                details={"role": [None, m.role], "custom": [False, snap["custom"]], "granted": _sorted_perms(snap["perms"])})
     return m
 
 

@@ -164,6 +164,22 @@ class MembershipViewSet(OrgScopedMixin, mixins.UpdateModelMixin, mixins.DestroyM
         members.remove_member(request.organization, request.membership, self.get_object())
         return Response(status=204)
 
+    @action(detail=False, methods=["get"])
+    def audit(self, request):
+        """Access audit trail (who changed whose role / permissions / status, and when). Needs users.manage.
+        ?member=<membership id> narrows it to one member. Newest first, at most 200 rows."""
+        from .models import AccessChange
+
+        qs = AccessChange.objects.filter(organization=request.organization)
+        raw = request.query_params.get("member")
+        if raw:
+            if not raw.isdigit():
+                raise ValidationError({"member": "Must be a number."})
+            qs = qs.filter(membership_id=int(raw))
+        return Response([{"id": r.id, "at": r.created_at, "event": r.event, "event_label": r.get_event_display(),
+                          "actor": r.actor_name or None, "target": r.target_name, "membership": r.membership_id,
+                          "details": r.details} for r in qs[:200]])
+
 
 class InvitationViewSet(OrgScopedMixin, mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     """Owners/admins invite people by email. An existing account is added directly; otherwise an invitation link is

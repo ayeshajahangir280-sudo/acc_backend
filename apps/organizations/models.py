@@ -159,3 +159,35 @@ class Invitation(TimeStamped):
         if self.cancelled_at:
             return "cancelled"
         return "expired" if self.expires_at <= timezone.now() else "pending"
+
+
+class AccessChange(TimeStamped):
+    """Audit trail of membership and permission changes: who changed whose access, when, and what changed.
+
+    Rows outlive the membership (removal deletes the Membership, not its history), so the target is kept by user and by
+    a snapshot of the name/email, and `membership_id` is a plain number rather than a foreign key. Append-only."""
+
+    class Event(models.TextChoices):
+        MEMBER_ADDED = "member_added", "Member added"
+        INVITED = "invited", "Invitation created"
+        INVITATION_CANCELLED = "invitation_cancelled", "Invitation cancelled"
+        INVITATION_ACCEPTED = "invitation_accepted", "Invitation accepted"
+        ROLE_CHANGED = "role_changed", "Role changed"
+        PERMISSIONS_CHANGED = "permissions_changed", "Permissions changed"
+        ACTIVATED = "activated", "Member activated"
+        DEACTIVATED = "deactivated", "Member deactivated"
+        REMOVED = "removed", "Member removed"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="access_changes")
+    event = models.CharField(max_length=24, choices=Event.choices)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+    actor_name = models.CharField(max_length=150, blank=True)
+    target_user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    target_name = models.CharField(max_length=254, blank=True)  # username, or the invited email
+    membership_id = models.PositiveIntegerField(null=True, blank=True)
+    # {"role": [old, new], "is_active": [old, new], "custom": [old, new], "granted": [...], "revoked": [...]}; only what changed
+    details = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [models.Index(fields=["organization", "-id"]), models.Index(fields=["organization", "membership_id"])]

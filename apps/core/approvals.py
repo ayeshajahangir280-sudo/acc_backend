@@ -21,7 +21,7 @@ def check_can_decide(membership, doc):
     from . import perms
 
     module = "expenses" if type(doc).__name__ == "Expense" else "purchase_invoices"
-    if membership is None or not perms.has(membership, module, perms.POST):
+    if membership is None or not perms.has(membership, module, perms.APPROVE):
         raise Forbidden("You do not have permission to approve or reject these documents.", "approval_forbidden")
     if doc.status != ApprovalStatus.PENDING:
         raise DomainError("This document is not waiting for approval.", "not_pending")
